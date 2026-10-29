@@ -37,12 +37,21 @@ public class MainActivity extends Activity {
             + "img-src 'self' https://barticom94.github.io data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'";
     WebView web;
     Store store;
+    Installer installer;
 
     static boolean ours(Uri u) { return "https".equals(u.getScheme()) && HOST.equals(u.getHost()); }
+
+    /** A JS string literal. Android's messages are untrusted text; U+2028/2029 break string literals in older WebViews. */
+    static String q(String s) { return JSONObject.quote(s).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"); }
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         store = new Store(this);
+        installer = new Installer(this, store, new Installer.Callback() {
+            @Override public void progress(String id, int pct) { js("app.onProgress(" + q(id) + "," + pct + ")"); }
+            @Override public void done(String id, boolean ok, String m) { js("app.onInstalled(" + q(id) + "," + ok + "," + q(m) + ")"); }
+        });
+        installer.cleanup();
         web = new WebView(this);
         web.setBackgroundColor(Color.BLACK);
         WebSettings s = web.getSettings();
@@ -117,7 +126,13 @@ public class MainActivity extends Activity {
     // web.onPause() is deliberately not called: there is no video to pause, and install progress is pushed from Java via js(), not polled by page timers.
     @Override protected void onResume() {
         super.onResume();
+        installer.onResume();                               // a held confirm screen starts only while we are in front
         js("window.app&&app.onResume()");
+    }
+
+    @Override protected void onPause() {
+        installer.onPause();
+        super.onPause();
     }
 
     @Override protected void onDestroy() {
@@ -142,6 +157,9 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void loadCatalog() {
             store.load(s -> js("app.onCatalog(" + s + ")"));   // s is org.json output: a JS object literal, never raw network text
         }
+
+        /** Answers with app.onProgress(id, pct) while downloading, then app.onInstalled(id, ok, message) once. */
+        @JavascriptInterface public void install(String id, String abi) { installer.install(id, abi); }
 
         @JavascriptInterface public void open(String pkg) {
             PackageManager pm = getPackageManager();
