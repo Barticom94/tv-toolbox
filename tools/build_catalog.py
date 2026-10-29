@@ -95,6 +95,7 @@ def _carry(app: dict, old: dict, fetch) -> tuple[dict, bytes | None]:
     """The entry already published, with apps.json edits applied. Each Pages deploy replaces the whole site, so the icon is fetched back too."""
     png = fetch.prev_icon(app["id"])
     entry = {**old, **_head(app, png)}
+    entry["package"] = old.get("package", entry["package"])  # a refused package change must not relabel the old files
     if png is None:
         entry.pop("icon", None)
     return entry, png
@@ -104,6 +105,8 @@ def _files_on_offer(app: dict, fetch, now: str) -> tuple[str, list[tuple[str, st
     """(published, [(abi, url, key)]) for the newest matching release, or the highest version in the folder."""
     src = app["source"]
     if src["type"] == "folder":
+        if not src["url"].endswith("/"):
+            raise ValueError("folder url must end with /")
         names = folder_pick(fetch.listing(src["url"]), src["asset"])
         got = pick_files([{"name": n} for n in names], src["asset"])
         files = [(abi, src["url"] + got[abi]["name"], got[abi]["name"]) for abi in ABI_ORDER if abi in got]
@@ -118,8 +121,9 @@ def _make_entry(app: dict, old: dict | None, fetch, now: str) -> tuple[dict, byt
     published, files = _files_on_offer(app, fetch, now)
     if not files:
         raise ValueError("no file matches")
-    pin = app.get("signer") or (old or {}).get("signer")
-    if old and pin == old.get("signer") and [(f["abi"], f["key"]) for f in old.get("files", [])] == [(abi, key) for abi, _, key in files]:
+    pin = (app.get("signer") or "").lower() or (old or {}).get("signer")  # parse_certs lowercases, so the pin must be lowercase too
+    unchanged = old and old.get("package") == app["package"] and pin == old.get("signer") and         [(f.get("abi"), f.get("key")) for f in old.get("files", [])] == [(abi, key) for abi, _, key in files]
+    if unchanged:
         return _carry(app, old, fetch)
     infos = []
     # ponytail: a changed key re-reads every file, not just the changed one; per-file reuse if big in-place replacements get common
@@ -134,7 +138,8 @@ def _make_entry(app: dict, old: dict | None, fetch, now: str) -> tuple[dict, byt
     first = infos[0]
     return {**_head(app, png), "versionName": first["versionName"], "versionCode": first["versionCode"],
             "minSdk": first["minSdk"], "targetSdk": first["targetSdk"], "signer": pin, "published": published,
-            "files": [{"abi": abi, "url": url, "size": i["size"], "sha256": i["sha256"], "key": key}
+            "files": [{"abi": abi, "url": url, "size": i["size"], "sha256": i["sha256"], "key": key,
+                       "versionCode": i["versionCode"], "versionName": i["versionName"]}
                       for (abi, url, key), i in zip(files, infos)]}, png
 
 

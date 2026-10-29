@@ -93,9 +93,10 @@ def check_apk_reasons():
 
 # build(): a fake fetch that counts read() calls
 class Fake:
-    def __init__(self, releases=None, listings=None, signer="aa", icon_png=b"PNG", prev_icons=None):
+    def __init__(self, releases=None, listings=None, signer="aa", icon_png=b"PNG", prev_icons=None, versions=None,
+                 package="com.nuvio.tv"):
         self._releases, self._listings, self.signer, self.icon_png = releases or {}, listings or {}, signer, icon_png
-        self._prev_icons, self.reads = prev_icons or {}, []
+        self._prev_icons, self.versions, self.package, self.reads = prev_icons or {}, versions or {}, package, []
 
     def releases(self, repo):
         got = self._releases[repo]
@@ -108,7 +109,8 @@ class Fake:
 
     def read(self, url):
         self.reads.append(url)
-        return {"package": "com.nuvio.tv", "versionCode": 1062, "versionName": "1.0.0", "minSdk": 24, "targetSdk": 36,
+        code = self.versions.get(abi_of(url), 1062)  # versions: versionCode by ABI
+        return {"package": self.package, "versionCode": code, "versionName": f"v{code}", "minSdk": 24, "targetSdk": 36,
                 "icon": "res/b.png", "signer": self.signer, "size": len(url), "sha256": "h" + url[-8:],
                 "icon_png": self.icon_png}
 
@@ -144,7 +146,7 @@ def new_release_is_read_once_per_file():
     assert [(f["abi"], f["url"], f["key"]) for f in e["files"]] == [
         ("armeabi-v7a", "https://github.com/o/r/releases/download/t/app-full-armeabi-v7a-release.apk", "11:2026-01-01T00:00:00Z"),
         ("universal", "https://github.com/o/r/releases/download/t/app-full-universal-release.apk", "12:2026-01-01T00:00:00Z")]
-    assert list(e["files"][0]) == ["abi", "url", "size", "sha256", "key"]
+    assert list(e["files"][0]) == ["abi", "url", "size", "sha256", "key", "versionCode", "versionName"]
 
 
 @check
@@ -211,11 +213,78 @@ def hidden_and_replaces_pass_through():
 
 
 @check
+def each_file_carries_its_own_version():
+    fx = Fake(releases={"o/nuvio": [release()]}, versions={"armeabi-v7a": 100, "universal": 101})
+    cat, icons, errs = build([app()], {"apps": []}, fx)
+    e = cat["apps"][0]
+    assert errs == []
+    assert [(f["abi"], f["versionCode"], f["versionName"]) for f in e["files"]] == [("armeabi-v7a", 100, "v100"), ("universal", 101, "v101")]
+    assert (e["versionCode"], e["versionName"]) == (100, "v100")  # the entry itself takes the first file's
+
+
+@check
+def new_release_replaces_the_old_entry():
+    fx = Fake(releases={"o/nuvio": [release("1.0.1", "2026-10-01", n=10)]}, versions={"armeabi-v7a": 200, "universal": 201})
+    cat, icons, errs = build([app()], CAT, fx)
+    e = cat["apps"][0]
+    assert errs == [] and len(fx.reads) == 2 and len(cat["apps"]) == 1
+    assert (e["versionCode"], e["published"], e["signer"]) == (200, "2026-10-01", "aa")
+    assert [f["key"] for f in e["files"]] == ["21:2026-01-01T00:00:00Z", "22:2026-01-01T00:00:00Z"]
+    assert icons == {"nuvio": b"PNG"}
+
+
+@check
+def pin_comparison_ignores_case():
+    cat, icons, errs = build([app(signer="AA")], {"apps": []}, Fake(releases={"o/nuvio": [release()]}))
+    assert errs == [] and cat["apps"][0]["signer"] == "aa"
+    fx = Fake(releases={"o/nuvio": [release()]}, prev_icons={"nuvio": b"PNG"})
+    cat, icons, errs = build([app(signer="AA")], CAT, fx)
+    assert fx.reads == [] and errs == [] and cat["apps"] == CAT["apps"]
+
+
+@check
+def pin_differing_from_the_old_signer_is_re_read_and_refused():
+    fx = Fake(releases={"o/nuvio": [release()]}, prev_icons={"nuvio": b"PNG"})  # same file keys as CAT
+    cat, icons, errs = build([app(signer="cc")], CAT, fx)
+    assert len(fx.reads) == 1 and errs == ["nuvio: signer changed from cc to aa"] and cat["apps"] == CAT["apps"]
+
+
+@check
+def old_entry_without_file_keys_is_read_again():
+    bare = {"apps": [{**CAT["apps"][0], "files": [{k: v for k, v in f.items() if k != "key"} for f in CAT["apps"][0]["files"]]}]}
+    fx = Fake(releases={"o/nuvio": [release()]})
+    cat, icons, errs = build([app()], bare, fx)
+    assert len(fx.reads) == 2 and errs == [] and cat["apps"] == CAT["apps"]
+
+
+@check
+def changed_package_is_read_again():
+    fx = Fake(releases={"o/nuvio": [release()]}, package="com.nuvio.tv2")
+    cat, icons, errs = build([app(package="com.nuvio.tv2")], CAT, fx)
+    assert len(fx.reads) == 2 and errs == [] and cat["apps"][0]["package"] == "com.nuvio.tv2"
+    # the APK still says com.nuvio.tv: refused, and the kept entry keeps the package its files really have
+    fx = Fake(releases={"o/nuvio": [release()]}, prev_icons={"nuvio": b"PNG"})
+    cat, icons, errs = build([app(package="com.other")], CAT, fx)
+    assert len(fx.reads) == 1 and errs == ["nuvio: package com.nuvio.tv is not com.other"] and cat["apps"] == CAT["apps"]
+
+
+def folder_app(url):
+    return {"id": "vlc", "name": "VLC", "blurb": "Plays.", "package": "com.nuvio.tv",
+            "source": {"type": "folder", "url": url, "asset": r"^VLC-Android-[0-9.]+-armeabi-v7a\.apk$"}}
+
+
+@check
+def folder_url_must_end_with_a_slash():
+    fx = Fake()  # listing() would raise KeyError if it were called
+    cat, icons, errs = build([folder_app("https://dl.example/vlc")], {"apps": []}, fx)
+    assert cat["apps"] == [] and errs == ["vlc: folder url must end with /"] and fx.reads == []
+
+
+@check
 def folder_source_uses_the_file_name_as_key():
     url = "https://dl.example/vlc/"
     listing = '<a href="VLC-Android-3.7.1-armeabi-v7a.apk">x</a><a href="VLC-Android-3.6.5-armeabi-v7a.apk">x</a>'
-    vlc = {"id": "vlc", "name": "VLC", "blurb": "Plays.", "package": "com.nuvio.tv",
-           "source": {"type": "folder", "url": url, "asset": r"^VLC-Android-[0-9.]+-armeabi-v7a\.apk$"}}
+    vlc = folder_app(url)
     fx = Fake(listings={url: listing})
     cat, icons, errs = build([vlc], {"apps": []}, fx)
     f = cat["apps"][0]["files"]
