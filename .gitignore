@@ -1,3 +1,5 @@
 build/
 keystore/
 __pycache__/
+docs/
+.superpowers/
