@@ -1,7 +1,18 @@
-"""Catalogue rules for TV Toolbox: which release and files to offer, what an APK must be, how catalog.json is put together.
-Pure functions only: everything that touches the network or runs a tool comes in through `fetch`."""
+"""Catalogue builder for TV Toolbox: which release and files to offer, what an APK must be, how catalog.json is put together.
+The rules are pure functions: everything that touches the network or runs a tool comes in through `fetch`. `Fetch` and `main` at the end are that I/O."""
+import hashlib
+import json
+import os
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+import zipfile
 from datetime import datetime, timezone
+from urllib.parse import unquote, urlsplit
 
 PAGES = "https://barticom94.github.io/tv-toolbox"
 ABI_ORDER = ("armeabi-v7a", "universal")  # armeabi-v7a first: it is what the TVs install, and it supplies the entry's versionCode
@@ -159,3 +170,136 @@ def build(apps: list[dict], prev: dict, fetch) -> tuple[dict, dict[str, bytes], 
         if png is not None:
             icons[app["id"]] = png
     return {"generated": now, "apps": out}, icons, errors
+
+
+TIMEOUT = 60  # seconds per network operation; the workflow's 30 minutes ends anything that crawls
+APPS_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "apps.json")
+
+
+class _HttpsOnly(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not newurl.lower().startswith("https://"):
+            raise ValueError("refusing a redirect to a non-HTTPS address")
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new and urlsplit(newurl).hostname != urlsplit(req.full_url).hostname:
+            new.headers.pop("Authorization", None)  # the token never follows a redirect to another host
+        return new
+
+
+def _open(url: str, headers: dict | None = None):
+    """GET over HTTPS only, redirects included. The caller closes the response."""
+    if not url.lower().startswith("https://"):
+        raise ValueError(f"not an HTTPS address: {url}")
+    req = urllib.request.Request(url, headers={"User-Agent": "tv-toolbox-catalog", **(headers or {})})
+    return urllib.request.build_opener(_HttpsOnly).open(req, timeout=TIMEOUT)
+
+
+def _get(url: str, headers: dict | None = None) -> bytes:
+    with _open(url, headers) as r:
+        return r.read()
+
+
+def _icon_png(path: str, name: str) -> bytes | None:
+    try:
+        with zipfile.ZipFile(path) as z:
+            data = z.read(name)
+    except (KeyError, zipfile.BadZipFile):
+        return None
+    return data if data.startswith(b"\x89PNG\r\n\x1a\n") else None
+
+
+class Fetch:
+    """The network and the SDK tools, as `build` wants them. Only `releases` carries GITHUB_TOKEN, and only to api.github.com."""
+
+    def __init__(self):
+        tools = os.environ.get("BUILD_TOOLS", "")
+        self.aapt2, self.apksigner = shutil.which("aapt2", path=tools), shutil.which("apksigner", path=tools)
+        self.catalog_url = os.environ.get("CATALOG_URL", f"{PAGES}/catalog.json")
+
+    def releases(self, repo: str) -> list[dict]:
+        headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+        if os.environ.get("GITHUB_TOKEN"):
+            headers["Authorization"] = "Bearer " + os.environ["GITHUB_TOKEN"]
+        try:
+            return json.loads(_get(f"https://api.github.com/repos/{repo}/releases?per_page=30", headers))
+        except urllib.error.HTTPError as e:
+            raise ValueError(f"GitHub answered {e.code} {e.reason} for {repo}") from None
+
+    def listing(self, url: str) -> str:
+        return _get(url).decode("utf-8", "replace")
+
+    def read(self, url: str) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            path, digest, size = os.path.join(tmp, "app.apk"), hashlib.sha256(), 0
+            with _open(url) as r, open(path, "wb") as f:
+                while chunk := r.read(1 << 20):
+                    f.write(chunk)
+                    digest.update(chunk)
+                    size += len(chunk)
+            run = lambda *cmd: subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+            info = parse_badging(run(self.aapt2, "dump", "badging", path).stdout)
+            signed = run(self.apksigner, "verify", "--print-certs", path)
+            if signed.returncode:
+                raise ValueError("not a valid signed APK")
+            return {**info, "signer": parse_certs(signed.stdout), "size": size, "sha256": digest.hexdigest(),
+                    "icon_png": _icon_png(path, info["icon"]) if info["icon"] else None}
+
+    def prev_icon(self, id: str) -> bytes | None:
+        try:
+            return _get(self.catalog_url.rsplit("/", 1)[0] + f"/icons/{id}.png")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise  # build() lets this abort the run: a catalogue that silently lost its icons must not be deployed
+
+    def previous(self) -> dict:
+        """The catalogue now live; none yet (404) or an unreadable one starts from empty, any other failure aborts."""
+        try:
+            got = json.loads(_get(self.catalog_url))
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+            return {"apps": []}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return {"apps": []}
+        return got if isinstance(got, dict) and isinstance(got.get("apps"), list) else {"apps": []}
+
+
+def plan(apps: list[dict], fetch) -> None:
+    """One line per app: what the next build would offer. Downloads nothing."""
+    for app in apps:
+        try:
+            _, files = _files_on_offer(app, fetch, "")
+            if not files:
+                raise ValueError("no file matches")
+            tag = unquote(files[0][1].split("/")[-2])  # the release tag, or the folder's name
+            print(app["id"], tag, *(f"{abi}={unquote(url.rsplit('/', 1)[1])}" for abi, url, _ in files))
+        except Exception as e:
+            print(app["id"], "ERROR", e if isinstance(e, ValueError) else repr(e))
+
+
+def main(argv: list[str]) -> None:
+    if len(argv) != 1:
+        sys.exit("usage: build_catalog.py OUT_DIR | --plan")
+    with open(APPS_JSON, encoding="utf-8") as f:
+        apps = json.load(f)["apps"]
+    fetch = Fetch()
+    if argv[0] == "--plan":
+        return plan(apps, fetch)
+    if not (fetch.aapt2 and fetch.apksigner):
+        sys.exit("aapt2 and apksigner not found: set BUILD_TOOLS to an Android build-tools folder")
+    catalog, icons, errors = build(apps, fetch.previous(), fetch)  # any exception here ends the run before anything is written
+    os.makedirs(os.path.join(argv[0], "icons"), exist_ok=True)
+    for id, png in icons.items():
+        with open(os.path.join(argv[0], "icons", id + ".png"), "wb") as f:
+            f.write(png)
+    with open(os.path.join(argv[0], "catalog.json"), "w", encoding="utf-8") as f:
+        json.dump(catalog, f, indent=2)
+        f.write("\n")
+    with open("errors.txt", "w", encoding="utf-8") as f:
+        f.writelines(line + "\n" for line in errors)
+    print(f"{len(catalog['apps'])} apps, {len(icons)} icons, {len(errors)} errors")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

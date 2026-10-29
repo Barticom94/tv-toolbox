@@ -1,0 +1,81 @@
+{
+  "apps": [
+    {
+      "id": "nuvio",
+      "name": "Nuvio",
+      "blurb": "Films, series and live TV.",
+      "package": "com.nuvio.tv",
+      "source": { "type": "github", "repo": "NuvioMedia/NuvioTV", "channel": "stable",
+                  "asset": "^app-full-(armeabi-v7a|universal)-release\\.apk$" }
+    },
+    {
+      "id": "nuvio-beta",
+      "name": "Nuvio (beta)",
+      "blurb": "Nuvio's newest test build.",
+      "package": "com.nuvio.tv",
+      "hidden": true,
+      "source": { "type": "github", "repo": "NuvioMedia/NuvioTV", "channel": "beta",
+                  "asset": "^app-full-(armeabi-v7a|universal)-release\\.apk$" }
+    },
+    {
+      "id": "smarttube",
+      "name": "SmartTube",
+      "blurb": "YouTube without the ads.",
+      "package": "org.smarttube.stable",
+      "replaces": ["com.teamsmart.videomanager.tv", "com.liskovsoft.smarttubetv.beta",
+                   "com.amazon.firetv.youtube", "org.smartteam.smarttube.tv.orig"],
+      "source": { "type": "github", "repo": "yuliskov/SmartTube", "channel": "stable",
+                  "asset": "^SmartTube_stable_[0-9.]+_(armeabi-v7a|universal)\\.apk$" }
+    },
+    {
+      "id": "vlc",
+      "name": "VLC",
+      "blurb": "Plays video and music from a USB stick or another device.",
+      "package": "org.videolan.vlc",
+      "source": { "type": "folder", "url": "https://download.videolan.org/pub/videolan/vlc-android/last/",
+                  "asset": "^VLC-Android-[0-9.]+-armeabi-v7a\\.apk$" }
+    },
+    {
+      "id": "localsend",
+      "name": "LocalSend",
+      "blurb": "Send photos and videos from your phone to the TV.",
+      "package": "org.localsend.localsend_app",
+      "source": { "type": "github", "repo": "localsend/localsend", "channel": "stable",
+                  "asset": "^LocalSend-[0-9.]+-android-arm32v7\\.apk$" }
+    },
+    {
+      "id": "aerial-views",
+      "name": "Aerial Views",
+      "blurb": "A screensaver of slow aerial films.",
+      "package": "com.neilturner.aerialviews",
+      "source": { "type": "github", "repo": "theothernt/AerialViews", "channel": "stable",
+                  "asset": "^aerial-views-[0-9.]+\\.apk$" }
+    },
+    {
+      "id": "projectivy",
+      "name": "Projectivy",
+      "blurb": "A simpler home screen with just your apps.",
+      "package": "com.spocky.projengmenu",
+      "source": { "type": "github", "repo": "spocky/miproja1", "channel": "stable",
+                  "asset": "^ProjectivyLauncher-[0-9.]+-c[0-9]+-xda-release\\.apk$" }
+    },
+    {
+      "id": "songsterr-tv",
+      "name": "Songsterr TV",
+      "blurb": "Test entry.",
+      "package": "local.adam.tabremote",
+      "hidden": true,
+      "source": { "type": "github", "repo": "Barticom94/tv-toolbox", "tagPrefix": "songsterr-tv-",
+                  "asset": "^songsterr-tv\\.apk$" }
+    },
+    {
+      "id": "toolbox",
+      "name": "TV Toolbox",
+      "blurb": "The toolbox itself.",
+      "package": "local.adam.tvtoolbox",
+      "hidden": true,
+      "source": { "type": "github", "repo": "Barticom94/tv-toolbox", "tag": "toolbox",
+                  "asset": "^tv-toolbox\\.apk$" }
+    }
+  ]
+}
