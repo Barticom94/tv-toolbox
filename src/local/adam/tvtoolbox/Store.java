@@ -30,7 +30,7 @@ import java.util.function.Consumer;
  *  of every package it names. */
 public class Store {
     static final String CATALOG_URL = "https://barticom94.github.io/tv-toolbox/catalog.json";
-    static final long FRESH_MS = 10 * 60 * 1000;
+    static final long FRESH_MS = 60 * 1000;                 // Pages clears its edge cache on each deploy, so this is a store change's whole wait
     static final int MAX_BYTES = 8 << 20;                   // the catalogue is a few KB; anything this big is not ours
     private static final String EMPTY = "{\"catalog\":null,\"savedAt\":null,\"offline\":true,\"installed\":{}}";
 
