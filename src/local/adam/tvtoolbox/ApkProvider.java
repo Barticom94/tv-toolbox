@@ -16,7 +16,7 @@ public class ApkProvider extends ContentProvider {
 
     @Override public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
         String name = uri.getLastPathSegment();             // decoded, so an encoded %2F shows up as '/' here
-        if (name == null || !name.endsWith(".apk") || name.contains("/")) throw new FileNotFoundException();
+        if (uri.getPathSegments().size() != 1 || name == null || !name.endsWith(".apk") || name.contains("/")) throw new FileNotFoundException();
         return ParcelFileDescriptor.open(new File(getContext().getCacheDir(), name), ParcelFileDescriptor.MODE_READ_ONLY);
     }
 

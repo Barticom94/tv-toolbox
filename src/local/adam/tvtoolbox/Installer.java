@@ -10,8 +10,10 @@ import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.net.Uri;
+import android.content.pm.ResolveInfo;
 import android.os.Build;
 import android.os.StatFs;
+import android.os.SystemClock;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -26,6 +28,7 @@ import java.math.BigInteger;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -42,6 +45,7 @@ public class Installer {
             DOWNLOAD = "Download failed, try again", MISMATCH = "This download doesn't match, not installing", FAILED = "Install failed";
     static final long MARGIN = 50L << 20;
     static final int RETRIES = 3;
+    static final long STALE_MS = 5000;      // in front this long with a confirm screen unanswered: it was left with Home
 
     /** The live installer, for the manifest receiver (the activity is single-instance). */
     static volatile Installer current;
@@ -53,6 +57,7 @@ public class Installer {
         final File apk;
         volatile int session = -1;          // this install's session; -1 = none, so no session result matches
         Intent held;                        // main thread only: a screen waiting for the activity to come to the front
+        Intent confirm;                     // main thread only: the confirm screen started, until the session answers again
         boolean fellBack, viewShown;        // main thread only: the fallback was used / its screen started
 
         Job(String id, JSONObject e, JSONObject f, File apk) {
@@ -78,6 +83,7 @@ public class Installer {
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
     private final AtomicReference<Job> running = new AtomicReference<>();
     private boolean front;                  // main thread only: the activity is resumed
+    private long frontSince;                // main thread only: elapsedRealtime of the last onResume
 
     public Installer(Activity a, Store s, Callback cb) {
         this.a = a;
@@ -90,10 +96,19 @@ public class Installer {
     public void install(String id, String abi) {
         Job j = job(id, abi);
         if (j == null) { cb.done(id, false, FAILED); return; }
-        if (!running.compareAndSet(null, j)) { cb.done(id, false, BUSY); return; }   // the running install's file is left alone
+        if (!running.compareAndSet(null, j)) { a.runOnUiThread(() -> busy(id)); return; }
         exec.execute(() -> {
             try { run(j); } catch (Throwable t) { finish(j, false, FAILED); }
         });
+    }
+
+    /** Main thread: a request while another install runs. If that install's confirm screen was started, the session hasn't
+     *  answered, and we have been in front for STALE_MS, the screen was left with Home: show it again (same session, never
+     *  abandoned, since an approved install may still be running) and give this request no answer; the page resends it later. */
+    private void busy(String id) {
+        Job j = running.get();
+        if (j != null && j.confirm != null && front && SystemClock.elapsedRealtime() - frontSince >= STALE_MS) show(j, j.confirm);
+        else cb.done(id, false, BUSY);
     }
 
     /** The job for this id and abi, or null when the entry, its file or any value the checks need is missing, or the URL isn't HTTPS. */
@@ -120,9 +135,10 @@ public class Installer {
     }
 
     /** True once exactly `size` bytes are on disk. A drop resumes with Range on the next try. */
-    private boolean download(Job j) {
+    private boolean download(Job j) throws InterruptedException {
         int[] last = {-1};
         for (int tries = 0; tries <= RETRIES; tries++) {
+            if (tries > 0) Thread.sleep(2000L * tries);
             try { if (fetch(j, last)) return true; } catch (IOException e) { /* resumed by the next try */ }
         }
         return false;
@@ -136,6 +152,7 @@ public class Installer {
             h.setConnectTimeout(15000);
             h.setReadTimeout(30000);
             h.setUseCaches(false);
+            h.setRequestProperty("Accept-Encoding", "identity");   // never gzip-decoded, so byte offsets for Range stay the file's
             if (have > 0) h.setRequestProperty("Range", "bytes=" + have + "-");
             int code = h.getResponseCode();
             if (!"https".equals(h.getURL().getProtocol())) throw new IOException("redirected off HTTPS");
@@ -211,8 +228,12 @@ public class Installer {
         int sid = j.session;
         j.session = -1;                                     // results from that session no longer count
         if (sid != -1) try { a.getPackageManager().getPackageInstaller().abandonSession(sid); } catch (RuntimeException e) { /* already gone */ }
-        show(j, new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + AUTHORITY + "/" + j.apk.getName()), MIME)
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+        Intent v = new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + AUTHORITY + "/" + j.apk.getName()), MIME)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        // Only the system's own installer gets the read grant, never another app that claims APKs.
+        List<ResolveInfo> r = a.getPackageManager().queryIntentActivities(v, PackageManager.MATCH_SYSTEM_ONLY | PackageManager.MATCH_DEFAULT_ONLY);
+        if (r.isEmpty()) { finish(j, false, FAILED); return; }
+        show(j, v.setPackage(r.get(0).activityInfo.packageName));
     }
 
     /** Main thread. Starts a confirm or Install screen now when we are in front, else on the next onResume(). */
@@ -220,13 +241,14 @@ public class Installer {
         if (!front) { j.held = i; return; }
         try {
             a.startActivity(i);
-            if (j.fellBack) j.viewShown = true;
+            if (j.fellBack) j.viewShown = true; else j.confirm = i;
         } catch (RuntimeException e) { fallback(j); }       // ActivityNotFoundException and friends
     }
 
     /** From MainActivity.onResume. Back from the fallback screen, the install ends with what is installed now. */
     public void onResume() {
         front = true;
+        frontSince = SystemClock.elapsedRealtime();
         Job j = running.get();
         if (j == null) return;
         if (j.viewShown) {
@@ -242,7 +264,7 @@ public class Installer {
     /** From MainActivity.onPause. */
     public void onPause() { front = false; }
 
-    /** From onCreate: APKs left by an earlier run (a fallback screen, a killed download). */
+    /** From onCreate: APKs left by an earlier run (a killed download, a fallback screen the app never came back from). */
     public void cleanup() {
         File[] fs = a.getCacheDir().listFiles((d, n) -> n.endsWith(".apk"));
         for (int i = 0; fs != null && i < fs.length; i++) fs[i].delete();
@@ -255,10 +277,11 @@ public class Installer {
         } catch (PackageManager.NameNotFoundException e) { return false; }
     }
 
-    /** The one way an install ends: frees the slot, deletes the APK unless the Install screen may still be reading it, answers once. */
+    /** The one way an install ends: frees the slot, deletes the APK, answers once. While the fallback screen is up nothing
+     *  calls this; once we are back in front, the system installer has its own copy. */
     private void finish(Job j, boolean ok, String message) {
         if (!running.compareAndSet(j, null)) return;
-        if (!j.viewShown) j.apk.delete();                   // kept for the fallback screen; cleanup() removes it next start
+        j.apk.delete();
         cb.done(j.id, ok, message);
     }
 
@@ -267,6 +290,7 @@ public class Installer {
         Job j = running.get();
         int sid = i.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1);
         if (j == null || sid == -1 || sid != j.session) return;   // another install's session, or one we left for the fallback
+        j.confirm = null;                                   // the session answered: any confirm screen started earlier is done with
         int status = i.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             Intent confirm = i.getParcelableExtra(Intent.EXTRA_INTENT);
