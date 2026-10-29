@@ -1,9 +1,13 @@
 """Self-check for build_catalog.py: python -I tools/check_catalog.py (stdlib only, exits 1 on the first failure)."""
+import json
 import os
 import re
 import sys
+import urllib.error
+from contextlib import contextmanager
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I drops the script folder from sys.path
+import build_catalog as bc
 from build_catalog import abi_of, build, check_apk, choose_release, folder_pick, parse_badging, parse_certs, pick_files
 
 
@@ -67,11 +71,15 @@ def folder_pick_highest_version():
 
 @check
 def parse_badging_fields():
-    B = ("package: name='com.nuvio.tv' versionCode='1062' versionName='1.0.0' platformBuildVersionName='16'\n"
-         "sdkVersion:'24'\ntargetSdkVersion:'36'\napplication-icon-160:'res/a.png'\napplication-icon-320:'res/b.png'\n"
+    # aapt2's lines, as the Action sees them: minSdkVersion, and compileSdkVersion on the package line
+    B = ("package: name='com.nuvio.tv' versionCode='1062' versionName='1.0.0' platformBuildVersionName='16' compileSdkVersion='36'\n"
+         "minSdkVersion:'24'\ntargetSdkVersion:'36'\napplication-icon-160:'res/a.png'\napplication-icon-320:'res/b.png'\n"
          "application-icon-65535:'res/c.xml'\n")
     assert parse_badging(B) == {"package": "com.nuvio.tv", "versionCode": 1062, "versionName": "1.0.0",
                                 "minSdk": 24, "targetSdk": 36, "icon": "res/b.png"}
+    assert parse_badging(B.replace("minSdkVersion:'24'", "sdkVersion:'21'"))["minSdk"] == 21  # aapt v1
+    assert parse_badging(B.replace("minSdkVersion:", "sdkVersion:'21'\nminSdkVersion:"))["minSdk"] == 24  # both: minSdkVersion wins
+    assert parse_badging(B.replace("minSdkVersion:'24'\n", ""))["minSdk"] == 1
     assert parse_badging(B.replace("res/a.png", "res/a.xml").replace("res/b.png", "res/b.xml"))["icon"] is None
 
 
@@ -96,9 +104,10 @@ class Fake:
     def __init__(self, releases=None, listings=None, signer="aa", icon_png=b"PNG", prev_icons=None, versions=None,
                  package="com.nuvio.tv"):
         self._releases, self._listings, self.signer, self.icon_png = releases or {}, listings or {}, signer, icon_png
-        self._prev_icons, self.versions, self.package, self.reads = prev_icons or {}, versions or {}, package, []
+        self._prev_icons, self.versions, self.package, self.reads, self.tags = prev_icons or {}, versions or {}, package, [], []
 
-    def releases(self, repo):
+    def releases(self, repo, tag=None):
+        self.tags.append(tag)
         got = self._releases[repo]
         if isinstance(got, Exception):
             raise got
@@ -293,3 +302,77 @@ def folder_source_uses_the_file_name_as_key():
     fx = Fake(listings={url: listing}, prev_icons={"vlc": b"PNG"})
     again, icons, errs = build([vlc], cat, fx)
     assert fx.reads == [] and again["apps"] == cat["apps"]
+
+
+@check
+def an_older_format_catalogue_is_read_again():
+    old = {k: v for k, v in CAT.items() if k != "format"}  # format 1 never read minSdk, so reusing its entries would keep minSdk 1
+    fx = Fake(releases={"o/nuvio": [release()]}, prev_icons={"nuvio": b"PNG"})
+    cat, icons, errs = build([app()], old, fx)
+    assert len(fx.reads) == 2 and errs == [] and cat["format"] == bc.FORMAT and cat["apps"] == CAT["apps"]
+    # the old entry's pin still holds while it is read again: no trust on first use
+    cat, icons, errs = build([app()], old, Fake(releases={"o/nuvio": [release()]}, signer="bb", prev_icons={"nuvio": b"PNG"}))
+    assert errs == ["nuvio: signer changed from aa to bb"] and cat["apps"] == CAT["apps"]
+
+
+@check
+def a_tag_source_asks_for_its_tag():
+    fx = Fake(releases={"o/nuvio": [release()]})
+    build([app(source={**app()["source"], "tag": "1.0.0"}), app()], {"apps": []}, fx)
+    assert fx.tags == ["1.0.0", None]
+
+
+# Fetch, with build_catalog._get stubbed: no network
+@contextmanager
+def http(answer):
+    real, bc._get = bc._get, lambda url, headers=None: answer(url)
+    try:
+        yield
+    finally:
+        bc._get = real
+
+
+def status(code):
+    def answer(url):
+        raise urllib.error.HTTPError(url, code, "x", None, None)
+    return answer
+
+
+@check
+def previous_starts_fresh_only_on_a_404():
+    with http(status(404)):
+        assert bc.Fetch().previous() == {"apps": []}
+    with http(lambda url: b'{"apps": []}'):
+        assert bc.Fetch().previous() == {"apps": []}
+    for body in (b"<html>Pages is having a moment</html>", b"\xff\xfe\x00", b'{"apps": {}}', b"[]"):  # 200s that aren't a catalogue
+        with http(lambda url: body):
+            try:
+                bc.Fetch().previous()
+            except ValueError:
+                continue
+        raise AssertionError(f"previous() accepted {body!r}")
+    with http(status(503)):
+        try:
+            bc.Fetch().previous()
+        except urllib.error.HTTPError:
+            pass
+        else:
+            raise AssertionError("previous() accepted a 503")
+
+
+@check
+def a_tag_is_fetched_by_its_own_endpoint():
+    seen = []
+
+    def answer(url):
+        seen.append(url)
+        if url.endswith("/missing"):
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+        return json.dumps({"tag_name": "toolbox"} if "/tags/" in url else [{"tag_name": "new"}]).encode()
+    with http(answer):
+        f = bc.Fetch()
+        assert f.releases("o/r", "toolbox") == [{"tag_name": "toolbox"}]
+        assert f.releases("o/r", "missing") == []
+        assert f.releases("o/r") == [{"tag_name": "new"}]
+    assert seen == ["https://api.github.com/repos/o/r/releases/tags/toolbox", "https://api.github.com/repos/o/r/releases/tags/missing",
+                    "https://api.github.com/repos/o/r/releases?per_page=30"]

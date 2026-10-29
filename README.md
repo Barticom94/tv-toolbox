@@ -26,8 +26,10 @@ Add one entry to `apps.json`:
 
 Push to `main` and the catalogue rebuilds on its own.
 
+## If the catalogue stops updating
+
+GitHub turns off a scheduled workflow when the repository has had no activity for 60 days. Open the Actions tab, choose "Catalogue", press "Enable workflow", then "Run workflow" to rebuild the catalogue straight away.
+
 ## Licences
 
 The font (Atkinson Hyperlegible Next) is under the SIL Open Font Licence; its licence file sits next to it in `assets/ui/fonts`. The ADB library will be BSD-3-Clause once it is added.
-
-GitHub pauses scheduled workflows after 60 days without commits. If the catalogue stops updating, run "catalog" by hand from the Actions tab to restart it.

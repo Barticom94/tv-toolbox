@@ -1,13 +1,18 @@
 package local.adam.tvtoolbox;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Color;
+import android.net.ConnectivityManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.StatFs;
 import android.provider.Settings;
 import android.view.KeyEvent;
 import android.webkit.JavascriptInterface;
@@ -26,6 +31,11 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import static local.adam.tvtoolbox.AdbCommands.Cmd.*;
 
 /** Serves assets/ui at https://toolbox.invalid/ (a name that can never resolve, so the page has a real origin and the
  *  bridge is only ever reachable from our own files). Java does every network call, install and shell command; the page
@@ -34,15 +44,27 @@ public class MainActivity extends Activity {
     static final String HOST = "toolbox.invalid";
     /** The page only draws: its own files, fonts, card icons from the store's Pages host, nothing else, no network of its own. */
     static final String CSP = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; "
-            + "img-src 'self' https://barticom94.github.io data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'";
+            + "img-src 'self' https://barticom94.github.io data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
     WebView web;
     Store store;
     Installer installer;
+    Adb adb;
+    Health health;
+    /** Tools run one at a time, in the order the page asked, so answers to the same tool come back in order. */
+    final ExecutorService tools = Executors.newSingleThreadExecutor();
+    final AtomicBoolean connecting = new AtomicBoolean();
+    /** An attempt failed (refused, timed out, no ADB): the TV's prompt is not asked again until the process restarts. */
+    static volatile boolean adbGaveUp;
+    /** The network check blocks for up to a minute, so it has its own thread and never holds up the tools. */
+    final ExecutorService net = Executors.newSingleThreadExecutor();
 
     static boolean ours(Uri u) { return "https".equals(u.getScheme()) && HOST.equals(u.getHost()); }
 
     /** A JS string literal. Android's messages are untrusted text; U+2028/2029 break string literals in older WebViews. */
     static String q(String s) { return JSONObject.quote(s).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"); }
+
+    /** org.json output ready to sit in a call to the page: legal JSON can still hold U+2028/2029, which older WebViews reject in JS. */
+    static String esc(String json) { return json.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"); }
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -52,6 +74,9 @@ public class MainActivity extends Activity {
             @Override public void done(String id, boolean ok, String m) { js("app.onInstalled(" + q(id) + "," + ok + "," + q(m) + ")"); }
         });
         installer.cleanup();
+        adb = new Adb(this);
+        health = new Health(this, store, adb);
+        connectTools();
         web = new WebView(this);
         web.setBackgroundColor(Color.BLACK);
         WebSettings s = web.getSettings();
@@ -82,6 +107,8 @@ public class MainActivity extends Activity {
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                 return !ours(r.getUrl());                   // never navigate away from our UI
             }
+            /** connectTools' answer can land before app.js has run (an approved loopback connect takes under a second). */
+            @Override public void onPageFinished(WebView v, String url) { js("window.app&&app.onTools(" + adb.connected() + ")"); }
             @Override public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail d) {
                 recreate();
                 return true;
@@ -117,7 +144,11 @@ public class MainActivity extends Activity {
             default: return super.dispatchKeyEvent(e);
         }
         if (e.getAction() == KeyEvent.ACTION_DOWN && web != null && (move || e.getRepeatCount() == 0)) {
-            if (cmd.equals("back")) web.evaluateJavascript("app.key('back')", r -> { if (!"true".equals(r)) finish(); });
+            if (cmd.equals("back")) web.evaluateJavascript("app.key('back')", r -> {
+                if ("true".equals(r)) return;
+                if (installer.active()) moveTaskToBack(true);   // finish() would orphan the install; this way it carries on
+                else finish();
+            });
             else web.evaluateJavascript("app.key('" + cmd + "')", null);
         }
         return true;
@@ -128,6 +159,7 @@ public class MainActivity extends Activity {
         super.onResume();
         installer.onResume();                               // a held confirm screen starts only while we are in front
         js("window.app&&app.onResume()");
+        if (!adb.connected()) connectTools();
     }
 
     @Override protected void onPause() {
@@ -137,8 +169,86 @@ public class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         if (web != null) { web.destroy(); web = null; }
+        health.close();
+        net.shutdownNow();
+        tools.execute(adb::close);                          // after any tool still running; the next launch connects afresh
+        tools.shutdown();
         super.onDestroy();
     }
+
+    /** This TV's own ADB, in the background, answered with app.onTools(ok). One attempt at a time: a call while one is
+     *  running gets that attempt's answer (onCreate and the onResume right after it, or the TV's prompt pausing us).
+     *  Only a TV with health.json (Adam's, pushed from his PC) tries, and only until an attempt fails, so a family TV
+     *  left with USB debugging on never shows "Allow USB debugging?". No answer when it doesn't try: Tools stay off. */
+    void connectTools() {
+        if (adbGaveUp || health.file() == null) return;
+        if (!connecting.compareAndSet(false, true)) return;
+        tools.execute(() -> {
+            boolean ok = adb.connected() || adb.connect();
+            if (!ok) adbGaveUp = true;
+            connecting.set(false);
+            js("window.app&&app.onTools(" + ok + ")");
+        });
+    }
+
+    /** One tool's answer as JSON text: "ok":true with "text" (the shell's output) and the tool's own fields, or
+     *  "ok":false with "error". Tools thread. */
+    String tool(String name, String arg) {
+        try {
+            JSONObject o = new JSONObject();
+            switch (name == null ? "" : name) {
+                case "meminfo": {
+                    ActivityManager.MemoryInfo m = new ActivityManager.MemoryInfo();
+                    ((ActivityManager) getSystemService(ACTIVITY_SERVICE)).getMemoryInfo(m);
+                    o.put("text", adb.run(MEMINFO, null)).put("avail", m.availMem).put("total", m.totalMem);
+                    break;
+                }
+                case "userApps": o.put("text", adb.run(USER_APPS, null)); break;
+                case "killAll": o.put("text", adb.run(KILL_ALL, null)); break;
+                case "stopApp": o.put("text", adb.run(Build.VERSION.SDK_INT < 34 ? FORCE_STOP : STOP_APP, arg)); break;  // stop-app is new in 14
+                case "forceStop": o.put("text", adb.run(FORCE_STOP, arg)); break;
+                case "diskstats": o.put("text", adb.run(DISKSTATS, null)).put("free", freeBytes()); break;
+                case "trimCaches": {
+                    long before = freeBytes();
+                    adb.run(TRIM, null);
+                    o.put("before", before).put("after", freeBytes());
+                    break;
+                }
+                case "clearCache":
+                    if (Build.VERSION.SDK_INT < 34) throw new IOException("Needs Android 14");
+                    o.put("text", adb.run(CLEAR_CACHE, arg));
+                    break;
+                case "reboot": o.put("text", adb.run(REBOOT, null)); break;
+                case "expiryGet": o.put("text", adb.run(EXPIRY_GET, null).trim()); break;
+                case "expiryOff": o.put("text", adb.run(EXPIRY_OFF, null)); break;
+                case "home": {
+                    ResolveInfo r = getPackageManager().resolveActivity(
+                            new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), PackageManager.MATCH_DEFAULT_ONLY);
+                    if (r == null || r.activityInfo == null) throw new IOException("No home app");
+                    o.put("text", r.activityInfo.packageName);
+                    break;
+                }
+                case "ime": o.put("text", adb.run(IME, null).trim()); break;
+                case "ping": o.put("text", adb.run(PING, "gateway".equals(arg) ? gateway() : "internet".equals(arg) ? "1.1.1.1" : null)); break;
+                default: throw new IllegalArgumentException("Unknown tool");
+            }
+            return o.put("ok", true).toString();
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            String m = e.getMessage();
+            return "{\"ok\":false,\"error\":" + JSONObject.quote(m != null ? m : e.getClass().getSimpleName()) + "}";
+        }
+    }
+
+    static long freeBytes() { return new StatFs("/data").getAvailableBytes(); }
+
+    /** The IPv4 router on the default route, or null (which ping refuses). */
+    String gateway() {
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        return Health.gateway(cm.getLinkProperties(cm.getActiveNetwork()));
+    }
+
+    SharedPreferences toolPrefs() { return getSharedPreferences("tools", MODE_PRIVATE); }
 
     class Bridge {
         /** What this TV is: the page decides which cards and tools make sense from it. */
@@ -148,6 +258,7 @@ public class MainActivity extends Activity {
                 return new JSONObject().put("sdk", Build.VERSION.SDK_INT).put("abis", new JSONArray(Build.SUPPORTED_ABIS))
                         .put("fireTv", pm.hasSystemFeature("amazon.hardware.fire_tv"))
                         .put("canInstall", pm.canRequestPackageInstalls())
+                        .put("healthFile", health.file() != null)
                         .put("self", getPackageName())
                         .put("version", pm.getPackageInfo(getPackageName(), 0).versionName).toString();
             } catch (Exception e) { return "{}"; }
@@ -158,8 +269,12 @@ public class MainActivity extends Activity {
             store.load(s -> js("app.onCatalog(" + s + ")"));   // s is org.json output: a JS object literal, never raw network text
         }
 
-        /** Answers with app.onProgress(id, pct) while downloading, then app.onInstalled(id, ok, message) once. */
+        /** Answers with app.onProgress(id, pct) while downloading, then app.onInstalled(id, ok, message) once. A request made
+         *  while another install is running can go unanswered, so the page never sends one: it queues and calls nudge(). */
         @JavascriptInterface public void install(String id, String abi) { installer.install(id, abi); }
+
+        /** A card pressed while the page's queue is busy: a confirm screen left with Home comes back. No answer. */
+        @JavascriptInterface public void nudge() { runOnUiThread(installer::nudge); }
 
         @JavascriptInterface public void open(String pkg) {
             PackageManager pm = getPackageManager();
@@ -181,6 +296,45 @@ public class MainActivity extends Activity {
                 startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
                 return true;
             } catch (ActivityNotFoundException e) { return false; }
+        }
+
+        /** Answers with app.onTools(ok), unless this TV doesn't try (see connectTools above). */
+        @JavascriptInterface public void connectTools() { MainActivity.this.connectTools(); }
+
+        /** Answers with app.onResult(name, json). Only stopApp, forceStop, clearCache and ping read arg (a package name, or
+         *  "gateway"/"internet"); every other tool gets null, whatever the page passed. */
+        @JavascriptInterface public void tool(String name, String arg) {
+            boolean takesArg = "stopApp".equals(name) || "forceStop".equals(name) || "clearCache".equals(name) || "ping".equals(name);
+            tools.execute(() -> js("app.onResult(" + q(name == null ? "" : name) + ","
+                    + MainActivity.this.tool(name, takesArg ? arg : null).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029") + ")"));
+        }
+
+        /** The text of health.json (the checks file on this TV), or null when it is missing. The page validates it. */
+        @JavascriptInterface public String healthText() { return health.healthText(); }
+
+        /** Runs the built-in rows and then checksJson, the page's validated checks: app.onHealthRow(row) per row in order, then
+         *  app.onResult("healthDone", {}). Java refuses any check that isn't https or of a known type. */
+        @JavascriptInterface public void health(String checksJson) {
+            health.run(checksJson, r -> js("app.onHealthRow(" + esc(r) + ")"), () -> js("app.onResult(\"healthDone\",{})"));
+        }
+
+        /** Answers with app.onResult("network", json) after up to a minute; hostsJson = a JSON array of extra hosts to look up. */
+        @JavascriptInterface public void network(String hostsJson) {
+            net.execute(() -> js("app.onResult(\"network\"," + esc(health.network(hostsJson)) + ")"));
+        }
+
+        /** The saved "Never close" list as a JSON array, or null before the page has saved one (the page then fills in defaults). */
+        @JavascriptInterface public String keepList() { return toolPrefs().getString("keep", null); }
+
+        /** Saves a JSON array of package names and returns the list now saved; anything else is refused and the old list returned. */
+        @JavascriptInterface public String setKeepList(String json) {
+            try {
+                JSONArray a = new JSONArray(json);
+                for (int i = 0; i < a.length(); i++)
+                    if (!(a.get(i) instanceof String) || !AdbCommands.isPackage(a.getString(i))) return keepList();
+                toolPrefs().edit().putString("keep", a.toString()).apply();
+                return a.toString();
+            } catch (Exception e) { return keepList(); }
         }
     }
 }

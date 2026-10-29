@@ -92,7 +92,8 @@ public class Installer {
         current = this;
     }
 
-    /** From the bridge. Answers with progress() while downloading, then exactly one done(). */
+    /** From the bridge. Answers with progress() while downloading, then one done(). A request made while another install
+     *  is running can go unanswered (busy()); the page never sends one, it queues the card and calls nudge() instead. */
     public void install(String id, String abi) {
         Job j = job(id, abi);
         if (j == null) { cb.done(id, false, FAILED); return; }
@@ -104,11 +105,25 @@ public class Installer {
 
     /** Main thread: a request while another install runs. If that install's confirm screen was started, the session hasn't
      *  answered, and we have been in front for STALE_MS, the screen was left with Home: show it again (same session, never
-     *  abandoned, since an approved install may still be running) and give this request no answer; the page resends it later. */
+     *  abandoned, since an approved install may still be running) and give this request no answer. */
     private void busy(String id) {
         Job j = running.get();
-        if (j != null && j.confirm != null && front && SystemClock.elapsedRealtime() - frontSince >= STALE_MS) show(j, j.confirm);
-        else cb.done(id, false, BUSY);
+        if (left(j)) show(j, j.confirm); else cb.done(id, false, BUSY);
+    }
+
+    /** An install is downloading, installing or waiting on its confirm screen. */
+    public boolean active() { return running.get() != null; }
+
+    /** Main thread, from the page: a card was pressed while its own queue is busy. Shows a confirm screen left with Home
+     *  again, as busy() does. Never answers. */
+    public void nudge() {
+        Job j = running.get();
+        if (left(j)) show(j, j.confirm);
+    }
+
+    /** Main thread. This job's confirm screen was started, the session hasn't answered, and we have been in front for STALE_MS. */
+    private boolean left(Job j) {
+        return j != null && j.confirm != null && front && SystemClock.elapsedRealtime() - frontSince >= STALE_MS;
     }
 
     /** The job for this id and abi, or null when the entry, its file or any value the checks need is missing, or the URL isn't HTTPS. */
@@ -227,6 +242,7 @@ public class Installer {
         j.fellBack = true;
         int sid = j.session;
         j.session = -1;                                     // results from that session no longer count
+        j.confirm = null;                                   // nor does its confirm screen: nudge() must not show it again
         if (sid != -1) try { a.getPackageManager().getPackageInstaller().abandonSession(sid); } catch (RuntimeException e) { /* already gone */ }
         Intent v = new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse("content://" + AUTHORITY + "/" + j.apk.getName()), MIME)
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);

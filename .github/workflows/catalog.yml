@@ -28,6 +28,8 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false   # the job never pushes; keeps the token out of .git/config, away from aapt2 and apksigner
       - name: Self-test
         run: python3 -I tools/check_catalog.py
       - name: Build the catalogue

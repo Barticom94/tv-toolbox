@@ -12,10 +12,11 @@ import urllib.error
 import urllib.request
 import zipfile
 from datetime import datetime, timezone
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 PAGES = "https://barticom94.github.io/tv-toolbox"
 ABI_ORDER = ("armeabi-v7a", "universal")  # armeabi-v7a first: it is what the TVs install, and it supplies the entry's versionCode
+FORMAT = 2  # entries from a catalogue of another format are read again (format 1 had minSdk 1 everywhere); pins still carry over
 
 
 def abi_of(name: str) -> str | None:
@@ -71,7 +72,7 @@ def parse_badging(text: str) -> dict:
         m = re.search(rf"^{key}:'(\d+)'", text, re.M)
         return int(m.group(1)) if m else default
 
-    min_sdk = sdk("sdkVersion", 1)  # Android's own defaults when the manifest says nothing
+    min_sdk = sdk("minSdkVersion", sdk("sdkVersion", 1))  # aapt2 prints minSdkVersion, aapt v1 sdkVersion; 1 is Android's own default
     icons = [(int(d), p) for d, p in re.findall(r"^application-icon-(\d+):'([^']*)'", text, re.M) if p.endswith(".png")]
     return {"package": at["name"], "versionCode": int(at["versionCode"]), "versionName": at["versionName"],
             "minSdk": min_sdk, "targetSdk": sdk("targetSdkVersion", min_sdk), "icon": max(icons)[1] if icons else None}
@@ -122,18 +123,19 @@ def _files_on_offer(app: dict, fetch, now: str) -> tuple[str, list[tuple[str, st
         got = pick_files([{"name": n} for n in names], src["asset"])
         files = [(abi, src["url"] + got[abi]["name"], got[abi]["name"]) for abi in ABI_ORDER if abi in got]
         return now, files  # a folder has no release date: the first run that sees the file stamps it
-    rel = choose_release(fetch.releases(src["repo"]), src)
+    rel = choose_release(fetch.releases(src["repo"], src.get("tag")), src)
     got = pick_files(rel["assets"], src["asset"]) if rel else {}
     files = [(abi, got[abi]["browser_download_url"], f"{got[abi]['id']}:{got[abi]['updated_at']}") for abi in ABI_ORDER if abi in got]
     return rel["published_at"] if rel else "", files
 
 
-def _make_entry(app: dict, old: dict | None, fetch, now: str) -> tuple[dict, bytes | None]:
+def _make_entry(app: dict, old: dict | None, fetch, now: str, reuse: bool = True) -> tuple[dict, bytes | None]:
     published, files = _files_on_offer(app, fetch, now)
     if not files:
         raise ValueError("no file matches")
     pin = (app.get("signer") or "").lower() or (old or {}).get("signer")  # parse_certs lowercases, so the pin must be lowercase too
-    unchanged = old and old.get("package") == app["package"] and pin == old.get("signer") and         [(f.get("abi"), f.get("key")) for f in old.get("files", [])] == [(abi, key) for abi, _, key in files]
+    unchanged = reuse and old and old.get("package") == app["package"] and pin == old.get("signer") and \
+        [(f.get("abi"), f.get("key")) for f in old.get("files", [])] == [(abi, key) for abi, _, key in files]
     if unchanged:
         return _carry(app, old, fetch)
     infos = []
@@ -156,12 +158,12 @@ def _make_entry(app: dict, old: dict | None, fetch, now: str) -> tuple[dict, byt
 
 def build(apps: list[dict], prev: dict, fetch) -> tuple[dict, dict[str, bytes], list[str]]:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    olds = {e["id"]: e for e in prev.get("apps", [])}
+    olds, reuse = {e["id"]: e for e in prev.get("apps", [])}, prev.get("format") == FORMAT
     out, icons, errors = [], {}, []
     for app in apps:
         old = olds.get(app["id"])
         try:
-            entry, png = _make_entry(app, old, fetch, now)
+            entry, png = _make_entry(app, old, fetch, now, reuse)
         except Exception as e:  # one bad source must not take the others down; the old entry stays live
             errors.append(f"{app['id']}: {e if isinstance(e, ValueError) else repr(e)}")
             entry, png = _carry(app, old, fetch) if old else (None, None)
@@ -169,7 +171,7 @@ def build(apps: list[dict], prev: dict, fetch) -> tuple[dict, dict[str, bytes], 
             out.append(entry)
         if png is not None:
             icons[app["id"]] = png
-    return {"generated": now, "apps": out}, icons, errors
+    return {"generated": now, "format": FORMAT, "apps": out}, icons, errors
 
 
 TIMEOUT = 60  # seconds per network operation; the workflow's 30 minutes ends anything that crawls
@@ -216,14 +218,19 @@ class Fetch:
         self.aapt2, self.apksigner = shutil.which("aapt2", path=tools), shutil.which("apksigner", path=tools)
         self.catalog_url = os.environ.get("CATALOG_URL", f"{PAGES}/catalog.json")
 
-    def releases(self, repo: str) -> list[dict]:
+    def releases(self, repo: str, tag: str | None = None) -> list[dict]:
+        """The newest 30 releases (GitHub lists newest first), or for a fixed tag just that one, which never drops off that page."""
         headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
         if os.environ.get("GITHUB_TOKEN"):
             headers["Authorization"] = "Bearer " + os.environ["GITHUB_TOKEN"]
+        url = f"https://api.github.com/repos/{repo}/releases" + (f"/tags/{quote(tag, safe='')}" if tag else "?per_page=30")
         try:
-            return json.loads(_get(f"https://api.github.com/repos/{repo}/releases?per_page=30", headers))
+            got = json.loads(_get(url, headers))
         except urllib.error.HTTPError as e:
+            if tag and e.code == 404:
+                return []  # no release with that tag
             raise ValueError(f"GitHub answered {e.code} {e.reason} for {repo}") from None
+        return [got] if tag else got
 
     def listing(self, url: str) -> str:
         return _get(url).decode("utf-8", "replace")
@@ -253,16 +260,17 @@ class Fetch:
             raise  # build() lets this abort the run: a catalogue that silently lost its icons must not be deployed
 
     def previous(self) -> dict:
-        """The catalogue now live; none yet (404) or an unreadable one starts from empty, any other failure aborts."""
+        """The catalogue now live. Only a 404 (none yet) starts from empty. Anything else that fails, including a 200 that isn't
+        a catalogue, raises: main then stops before writing, so a bad Pages answer can never drop the signer pins."""
         try:
-            got = json.loads(_get(self.catalog_url))
+            got = json.loads(_get(self.catalog_url))  # bad JSON or bytes raise ValueError (JSONDecodeError, UnicodeDecodeError)
         except urllib.error.HTTPError as e:
             if e.code != 404:
                 raise
             return {"apps": []}
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return {"apps": []}
-        return got if isinstance(got, dict) and isinstance(got.get("apps"), list) else {"apps": []}
+        if not (isinstance(got, dict) and isinstance(got.get("apps"), list)):
+            raise ValueError("the live catalogue has no apps list")
+        return got
 
 
 def plan(apps: list[dict], fetch) -> None:

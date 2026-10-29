@@ -1,5 +1,125 @@
-/* Stub styles (Task 3): a file of its own because the page's CSP allows no inline style. Task 7 replaces it. */
-html, body { margin: 0; height: 100%; background: #0F1722; color: #F2F5F9; font: 28px sans-serif; }
-body { padding: 48px; }
-h1 { margin: 0 0 24px; }
-pre { font-size: 22px; white-space: pre-wrap; }
+/* TV Toolbox screens. A file of its own: the page's CSP allows no inline style. */
+@font-face { font-family: 'Atkinson Hyperlegible Next'; src: url(fonts/AtkinsonHyperlegibleNext.ttf) format('truetype'); font-weight: 200 800; }
+
+/* The icon's three colours, plus the surfaces between them. Every text pair here is 7:1 or better (see the Task 7 report). */
+:root {
+  --plate: #12202B;   /* the ground */
+  --ink: #F4F6FA;     /* type */
+  --amber: #F2B134;   /* focus, letter tiles */
+  --card: #1B2D3B;    /* cards, banners, the dialog */
+  --raise: #2A4256;   /* buttons (ink type only: mist on it is under 7:1) */
+  --well: #0E1923;    /* badges, set into the card */
+  --mist: #C3CDD9;    /* secondary type, on plate or card only */
+  --good: #5ACB8F;    /* Tools state marks only, never type: 6.99 on card */
+  --bad: #FF7B72;     /* Tools state marks only, never type: 5.61 on card */
+}
+
+html { font-size: 1vw; background: var(--plate); }   /* 1rem is 1% of the screen, so the layout scales with the TV */
+body { margin: 0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; color: var(--ink); background: var(--plate);
+       font: 500 1.6rem/1.3 'Atkinson Hyperlegible Next', sans-serif; -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; text-align: inherit; cursor: pointer; }
+h1, h2, h3, p, pre { margin: 0; }
+[hidden] { display: none !important; }
+
+header { flex: none; display: flex; align-items: center; gap: 3rem; padding: 2.4rem 4rem 1.4rem; }
+h1 { font-size: 2.4rem; font-weight: 800; }
+#tabs { display: flex; gap: 1rem; }
+.tab { padding: .5rem 1.4rem; border-radius: .6rem; color: var(--mist); font-weight: 700; }
+.tab.on { color: var(--ink); box-shadow: inset 0 -.3rem 0 var(--amber); }
+
+main { flex: 1; min-height: 0; }
+.page { height: 100%; overflow-y: auto; box-sizing: border-box; padding: 1rem 4rem 4rem; scrollbar-width: none; }
+.page::-webkit-scrollbar { display: none; }
+
+/* Focus: a 6 px outline and a slight lift. The card around a focused button gets a quieter ring. */
+.f { transition: transform 120ms ease-out; }
+.f.focus { outline: 6px solid var(--amber); outline-offset: .3rem; transform: scale(1.04); }
+.card.f.focus { transform: scale(1.02); }
+.card.within { box-shadow: 0 0 0 .2rem var(--mist); }
+
+.banner { display: flex; align-items: center; gap: 2rem; background: var(--card); border-left: .6rem solid var(--amber);
+          border-radius: 1rem; padding: 1.4rem 2rem; margin-bottom: 1.6rem; }
+.banner .text { flex: 1; }
+.banner .status { margin-top: .4rem; }
+.setup { display: block; }
+.setup p { margin-bottom: .7rem; }
+.setup .lead { font-weight: 700; }
+.setup .btn { margin-top: .8rem; }
+.note { color: var(--mist); margin: 0 0 1.6rem; }
+.bar { margin-bottom: 1.6rem; }
+.group { font-size: 2rem; font-weight: 800; margin: 3rem 0 1.4rem; }
+
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.6rem; }
+.card { display: flex; flex-direction: column; gap: 1rem; background: var(--card); border-radius: 1rem; padding: 1.4rem;
+        scroll-margin: 6rem 0 3rem; }
+.top { display: flex; gap: 1.4rem; align-items: flex-start; }
+.icon { flex: none; width: 5rem; height: 5rem; border-radius: 1rem; }
+.tile { display: grid; place-items: center; background: var(--amber); color: var(--plate); font-size: 2.8rem; font-weight: 800; }
+.name { font-size: 2rem; font-weight: 700; line-height: 1.15; }
+.blurb { color: var(--mist); font-size: 1.5rem; margin-top: .3rem; }
+.badge { align-self: flex-start; background: var(--well); border-radius: .6rem; padding: .3rem .9rem; font-size: 1.45rem; font-weight: 700; }
+.status { font-weight: 700; white-space: pre-line; }
+.buttons { display: flex; flex-wrap: wrap; gap: 1.2rem; margin-top: auto; padding-top: .4rem; }
+.btn { background: var(--raise); border-radius: .8rem; padding: .7rem 1.3rem; font-weight: 700; white-space: nowrap; }
+.btn.focus { background: var(--ink); color: var(--plate); }
+
+#about h2 { font-size: 2.4rem; font-weight: 800; margin-bottom: 1rem; }
+#about-tools { margin-bottom: 1rem; }
+#licences h3 { font-size: 1.8rem; margin: 2rem 0 .8rem; }
+#licences pre { font: 500 1.3rem/1.4 'Atkinson Hyperlegible Next', sans-serif; color: var(--mist); white-space: pre-wrap; max-width: 70rem; }
+
+#dialog { position: fixed; top: 0; right: 0; bottom: 0; left: 0; display: grid; place-items: center; background: rgba(14, 25, 35, .88); }
+#dialog .box { background: var(--card); border-radius: 1.2rem; padding: 2.6rem 3rem; max-width: 52rem; }
+#dialog p { font-size: 2rem; font-weight: 700; margin-bottom: 2rem; }
+
+/* ---- Tools: the approval switch, the four tiles and the tool screens ---- */
+.btn:disabled { background: var(--well); cursor: default; }   /* running: set into the page; ink on well is 16.42 */
+.btn:disabled.focus { color: var(--ink); }
+
+.switch { flex-direction: row; align-items: center; gap: 2.4rem; }
+.switch .text { flex: 1; min-width: 0; }
+.switch .name { overflow-wrap: anywhere; }
+.switch .blurb { margin-top: .5rem; max-width: 80rem; }
+.knob { flex: none; position: relative; width: 6.4rem; height: 3.4rem; box-sizing: border-box; border: .3rem solid var(--mist); border-radius: 1.7rem; }
+.knob::after { content: ''; position: absolute; top: .4rem; left: .4rem; width: 2rem; height: 2rem; border-radius: 50%; background: var(--mist); }
+.switch.on .knob { background: var(--amber); border-color: var(--amber); }
+.switch.on .knob::after { left: 3.4rem; background: var(--plate); }
+.expiry { width: 100%; margin-bottom: 1.6rem; }
+.state { font-weight: 700; margin-top: .6rem; }
+.tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.tiles .card { min-height: 9rem; justify-content: flex-end; }
+
+.head { display: flex; align-items: center; gap: 2.4rem; margin-bottom: 1.6rem; }
+.head h2 { font-size: 2.4rem; font-weight: 800; }
+.head .note { margin: 0; }
+.split .bar, .actions .bar { display: flex; flex-wrap: wrap; gap: 1.6rem; }
+.actions { display: flex; align-items: center; gap: 3rem; margin-bottom: 1.6rem; }
+.actions .bar, .actions .big { margin-bottom: 0; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 3rem; align-items: start; }
+.big { font-size: 1.8rem; font-weight: 700; margin-bottom: 1.2rem; }
+.title { font-size: 1.8rem; font-weight: 800; margin-bottom: 1rem; }
+.gauge { -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 1.6rem; border: 0; border-radius: .8rem;
+         background: var(--well); overflow: hidden; margin-bottom: 2rem; }
+.gauge::-webkit-progress-bar { background: var(--well); }
+.gauge::-webkit-progress-value { background: var(--amber); border-radius: .8rem; }
+.facts p { font-size: 1.8rem; margin-bottom: 1.2rem; }
+
+/* List rows (memory, storage) and check boxes (health, DNS). Rows are one line, the same height with or without a button. */
+.row { flex-direction: row; align-items: center; gap: 1.6rem; box-sizing: border-box; min-height: 4.2rem; padding: .6rem 1.4rem; margin-bottom: .8rem; }
+.row .name { flex: 1; min-width: 0; font-size: 1.6rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .btn { padding: .4rem 1.2rem; }
+.check .name { font-size: 1.6rem; overflow-wrap: anywhere; }
+.sub { color: var(--mist); font-size: 1.45rem; }
+.row .sub, .size { white-space: nowrap; }
+.size { font-weight: 700; }
+.two { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.2rem; }
+.check { gap: .2rem; padding: .8rem 1.4rem; }
+.split .check { padding: .7rem 1.4rem; margin-bottom: .8rem; }
+.line { display: flex; align-items: center; gap: 1.2rem; }
+.ms { margin-left: auto; color: var(--mist); white-space: nowrap; }
+.check .sub { padding-left: 2.8rem; }
+/* The mark: green circle, amber diamond, red square, grey ring. */
+.mark { flex: none; width: 1.6rem; height: 1.6rem; box-sizing: border-box; border-radius: 50%; background: var(--good); }
+.amber .mark { background: var(--amber); border-radius: .2rem; transform: rotate(45deg) scale(.85); }
+.red .mark { background: var(--bad); border-radius: .2rem; }
+.grey .mark { background: none; border: .3rem solid var(--mist); }
