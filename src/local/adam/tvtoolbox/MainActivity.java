@@ -21,13 +21,17 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 /** Serves assets/ui at https://toolbox.invalid/ (a name that can never resolve, so the page has a real origin and the
  *  bridge is only ever reachable from our own files). Java does every network call, install and shell command; the page
  *  only draws. Keys go to the page as app.key(cmd); answers come back through js(). */
 public class MainActivity extends Activity {
     static final String HOST = "toolbox.invalid";
+    /** The page only draws: its own files, fonts, card icons from the store's Pages host, nothing else, no network of its own. */
+    static final String CSP = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; "
+            + "img-src 'self' https://barticom94.github.io data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'";
     WebView web;
 
     static boolean ours(Uri u) { return "https".equals(u.getScheme()) && HOST.equals(u.getHost()); }
@@ -52,7 +56,10 @@ public class MainActivity extends Activity {
                 path = path == null || path.length() < 2 ? "index.html" : path.substring(1);
                 try {
                     WebResourceResponse res = new WebResourceResponse(mime(path), "utf-8", getAssets().open("ui/" + path));
-                    res.setResponseHeaders(Collections.singletonMap("Cache-Control", "no-store"));
+                    Map<String, String> h = new HashMap<>();
+                    h.put("Cache-Control", "no-store");
+                    h.put("Content-Security-Policy", CSP);
+                    res.setResponseHeaders(h);
                     return res;
                 } catch (IOException e) {
                     return new WebResourceResponse("text/plain", "utf-8", 404, "Not Found", null, new ByteArrayInputStream(new byte[0]));
@@ -102,6 +109,7 @@ public class MainActivity extends Activity {
         return true;
     }
 
+    // web.onPause() is deliberately not called: there is no video to pause, and install progress is pushed from Java via js(), not polled by page timers.
     @Override protected void onResume() {
         super.onResume();
         js("window.app&&app.onResume()");

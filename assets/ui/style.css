@@ -1,0 +1,5 @@
+/* Stub styles (Task 3): a file of its own because the page's CSP allows no inline style. Task 7 replaces it. */
+html, body { margin: 0; height: 100%; background: #0F1722; color: #F2F5F9; font: 28px sans-serif; }
+body { padding: 48px; }
+h1 { margin: 0 0 24px; }
+pre { font-size: 22px; white-space: pre-wrap; }

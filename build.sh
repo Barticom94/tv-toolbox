@@ -11,6 +11,7 @@ export JAVA_HOME="$JDK" PATH="$JDK/bin:$PATH"
 PY=/c/Python314/python
 
 cd "$ROOT"
+[ "${1:-}" != install ] || : "${TV:?set TV=<ip>:5555}"   # the TV's address is not kept in the repo; checked before the version bump
 VC=$(( $(cat versionCode 2>/dev/null || echo 0) + 1 )); echo $VC > versionCode
 B=build; rm -rf $B; mkdir -p $B/gen $B/classes $B/dex
 
@@ -27,7 +28,6 @@ $PY -c "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],'a',zipfile.ZIP_DEFLAT
 echo "BUILD OK: versionCode $VC, $(stat -c %s $B/tv-toolbox.apk) bytes"
 
 if [ "${1:-}" = "install" ]; then
-  TV=${TV:?set TV=<ip>:5555 to install}                # not kept in the repo
   adb connect $TV >/dev/null
   adb -s $TV install -r "$ROOT/$B/tv-toolbox.apk"
   adb -s $TV shell am start -n local.adam.tvtoolbox/.MainActivity
