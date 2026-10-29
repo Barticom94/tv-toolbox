@@ -1,11 +1,14 @@
 package local.adam.tvtoolbox;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.view.KeyEvent;
 import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
@@ -33,11 +36,13 @@ public class MainActivity extends Activity {
     static final String CSP = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; "
             + "img-src 'self' https://barticom94.github.io data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'";
     WebView web;
+    Store store;
 
     static boolean ours(Uri u) { return "https".equals(u.getScheme()) && HOST.equals(u.getHost()); }
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        store = new Store(this);
         web = new WebView(this);
         web.setBackgroundColor(Color.BLACK);
         WebSettings s = web.getSettings();
@@ -131,6 +136,33 @@ public class MainActivity extends Activity {
                         .put("self", getPackageName())
                         .put("version", pm.getPackageInfo(getPackageName(), 0).versionName).toString();
             } catch (Exception e) { return "{}"; }
+        }
+
+        /** Answers with app.onCatalog(...): the catalogue (fresh, or the saved copy when offline) and what is installed from it. */
+        @JavascriptInterface public void loadCatalog() {
+            store.load(s -> js("app.onCatalog(" + s + ")"));   // s is org.json output: a JS object literal, never raw network text
+        }
+
+        @JavascriptInterface public void open(String pkg) {
+            PackageManager pm = getPackageManager();
+            Intent i = pm.getLeanbackLaunchIntentForPackage(pkg);
+            if (i == null) i = pm.getLaunchIntentForPackage(pkg);
+            if (i == null) return;
+            try { startActivity(i); } catch (ActivityNotFoundException | SecurityException e) { /* nothing to open */ }
+        }
+
+        /** The system uninstall screen, and only for packages the catalogue names; the page reloads on app.onResume(). */
+        @JavascriptInterface public void uninstall(String pkg) {
+            if (!store.isCatalogPackage(pkg)) return;
+            try { startActivity(new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + pkg))); } catch (ActivityNotFoundException e) { /* no uninstaller */ }
+        }
+
+        /** The "Install unknown apps" screen for this app; false when this TV has no such screen. */
+        @JavascriptInterface public boolean openInstallSettings() {
+            try {
+                startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+                return true;
+            } catch (ActivityNotFoundException e) { return false; }
         }
     }
 }
