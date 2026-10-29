@@ -31,6 +31,15 @@
                   "asset": "^SmartTube_stable_[0-9.]+_(armeabi-v7a|universal)\\.apk$" }
     },
     {
+      "id": "snug",
+      "name": "Snug",
+      "blurb": "Live sport and sports channels.",
+      "package": "local.adam.streamedtv",
+      "signer": "e779da4b0df480c98c4404a9ab03fbffcc1c22c322a158dbde6deb972c5aaf77",
+      "source": { "type": "github", "repo": "Barticom94/snug", "channel": "stable",
+                  "asset": "^snug\\.apk$" }
+    },
+    {
       "id": "songsterr-tv",
       "name": "Songsterr TV",
       "blurb": "Guitar tabs that scroll along with the song.",
