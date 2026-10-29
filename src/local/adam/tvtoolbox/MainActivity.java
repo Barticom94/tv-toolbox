@@ -10,10 +10,12 @@ import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.net.ConnectivityManager;
 import android.net.Uri;
+import android.net.VpnService;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.StatFs;
 import android.provider.Settings;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
@@ -31,6 +33,8 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -41,7 +45,7 @@ import static local.adam.tvtoolbox.AdbCommands.Cmd.*;
  *  bridge is only ever reachable from our own files). Java does every network call, install and shell command; the page
  *  only draws. Keys go to the page as app.key(cmd); answers come back through js(). */
 public class MainActivity extends Activity {
-    static final String HOST = "toolbox.invalid";
+    static final String HOST = "toolbox.invalid", TAG = "TVToolbox";
     /** The page only draws: its own files, fonts, card icons from the store's Pages host, nothing else, no network of its own. */
     static final String CSP = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; "
             + "img-src 'self' https://barticom94.github.io data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
@@ -230,12 +234,20 @@ public class MainActivity extends Activity {
                 }
                 case "ime": o.put("text", adb.run(IME, null).trim()); break;
                 case "ping": o.put("text", adb.run(PING, "gateway".equals(arg) ? gateway() : "internet".equals(arg) ? "1.1.1.1" : null)); break;
+                case "vpnApps": {                           // apps that can run a VPN: Close background apps never stops them
+                    Set<String> vpn = new TreeSet<>();
+                    for (ResolveInfo r : getPackageManager().queryIntentServices(new Intent(VpnService.SERVICE_INTERFACE), 0))
+                        if (r.serviceInfo != null) vpn.add(r.serviceInfo.packageName);
+                    o.put("apps", new JSONArray(vpn));
+                    break;
+                }
                 default: throw new IllegalArgumentException("Unknown tool");
             }
             return o.put("ok", true).toString();
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             String m = e.getMessage();
+            Log.w(TAG, "tool " + name + " failed: " + e.getClass().getSimpleName() + (m != null ? ": " + m : ""));   // no tool takes a URL
             return "{\"ok\":false,\"error\":" + JSONObject.quote(m != null ? m : e.getClass().getSimpleName()) + "}";
         }
     }

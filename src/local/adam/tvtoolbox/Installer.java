@@ -42,7 +42,8 @@ public class Installer {
 
     static final String AUTHORITY = "local.adam.tvtoolbox.apk", MIME = "application/vnd.android.package-archive";
     static final String BUSY = "Another install is running", NO_SPACE = "Not enough space on this TV",
-            DOWNLOAD = "Download failed, try again", MISMATCH = "This download doesn't match, not installing", FAILED = "Install failed";
+            DOWNLOAD = "Download failed, try again", MISMATCH = "This download doesn't match, not installing", FAILED = "Install failed",
+            CANCELLED = "Cancelled";
     static final long MARGIN = 50L << 20;
     static final int RETRIES = 3;
     static final long STALE_MS = 5000;      // in front this long with a confirm screen unanswered: it was left with Home
@@ -314,6 +315,8 @@ public class Installer {
             else show(j, confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         } else if (status == PackageInstaller.STATUS_SUCCESS) {
             finish(j, true, "");
+        } else if (status == PackageInstaller.STATUS_FAILURE_ABORTED) {
+            finish(j, false, CANCELLED);                    // Cancel on the confirm screen: the card says just that
         } else {
             String m = i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
             finish(j, false, m == null || m.isEmpty() ? FAILED : m);

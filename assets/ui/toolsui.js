@@ -2,7 +2,7 @@
 // mean; this file draws them and runs the steps. app.js keeps the focus and the dialog and hands them over in init().
 // Strict CSP: no inline style or handlers. Shell output, package names and check names only go in through textContent.
 (function () {
-  const FAIL = "Couldn't read the details.", CHECKING = 'Checking…';
+  const FAIL = "Couldn't read the details.", CHECKING = 'Checking…', NO_ANSWER = Tools.NO_ANSWER;
   const HELP = 'Without this, the TV asks "Allow USB debugging?" again after 7 days without opening TV Toolbox. '
     + 'It applies to every computer approved on this TV, your PC included.';
   const NOTE = 'Android keeps apps parked on purpose, so closed apps take longer to open next time.';
@@ -13,20 +13,27 @@
   const DNS = { ok: 'OK', blocked: 'Pi-hole (or your ISP) is blocking it', failed: "can't be found" };
   const PKG = /^[A-Za-z0-9_.]+$/;
 
-  let kit, view = 'home', expiry = null, expiryBusy = false;   // expiry: true once the approval never expires
-  const mem = { info: null, apps: null, keep: [], busy: false, result: null };
-  const tidy = { disk: null, busy: false, result: null };
-  let health = { running: false, rows: [], file: null, checks: [] };
+  let kit, view = 'home', expiry = null, expiryBusy = false, expiryNote = null;   // expiry: true once the approval never expires
+  // apps: user apps, vpn: apps that provide a VPN (null until known: then nothing gets a Stop button), appsFail: why apps is null
+  const mem = { info: null, apps: null, appsFail: FAIL, vpn: null, keep: [], busy: false, result: null };
+  const tidy = { disk: null, busy: false, result: null, cleared: [] };   // cleared: see Tools.lessCleared
+  let health = { running: false, rows: [], file: null, checks: [], error: null };
   let net = { running: false, answer: null };
-  const waiting = {};
+  const waiting = new Tools.Waiters();
+  const HEALTH_GAP = 45000;   // Java gives each health row up to 30 s (Health.ROW_MS); a longer silence means the TV stopped answering
 
   // ---- talking to Java ----
 
-  /** The next answer to `name`. Java runs tools one at a time, so each name's answers come back in the order asked. */
-  function expect(name, send) {
-    return new Promise(res => { (waiting[name] = waiting[name] || []).push(res); send(); });
+  /** The next answer to `name`, or {ok:false, error: NO_ANSWER} after `ms` (30 s unless given). Java runs tools one at a time,
+   *  so each name's answers come back in the order asked; Tools.Waiters throws away a late one. */
+  function expect(name, send, ms) {
+    const p = waiting.wait(name, ms || 30000);
+    send();
+    return p;
   }
   const tool = (name, arg) => expect(name, () => TV.tool(name, arg == null ? null : arg));
+  /** What a screen says when an answer failed: the no-answer text when the TV went quiet, else the usual line. */
+  const why = r => r && r.error === NO_ANSWER ? NO_ANSWER : FAIL;
   const list = s => { try { const a = JSON.parse(s); return Array.isArray(a) ? a : null; } catch (e) { return null; } };
   const self = () => kit.device().self || 'local.adam.tvtoolbox';
   const size = b => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.round(b / 1e6) + ' MB';
@@ -90,6 +97,7 @@
   function home() {
     const parts = [el('h3', 'name', 'Stop the debugging approval expiring'), el('p', 'blurb', HELP)];
     if (expiry) parts.push(el('p', 'state', 'Approval never expires'));
+    else if (expiryNote) parts.push(el('p', 'state', expiryNote));
     const sw = toggle('expiry', !!expiry, parts, stopExpiry);
     sw.classList.add('expiry');
     if (!expiry) sw.classList.add('f');              // nothing can turn expiry back on, so once set it is a line, not a stop
@@ -119,20 +127,22 @@
     right.append(el('h3', 'title', 'Using the most memory'));
     if (m) {
       const top = m.ok ? Tools.topMemory(m.text, 8) : [];
-      if (!top.length) right.append(el('p', 'note', FAIL));
+      if (!top.length) right.append(el('p', 'note', why(m)));
       top.forEach(p => {
         const pkg = p.name.split(':')[0], r = row(p.name, size(p.kb * 1024));
-        if (mem.apps && mem.apps.includes(pkg) && pkg !== self()) r.append(busyButton('Stop', 'stop:' + p.name, () => stopOne(pkg), mem.busy));
+        // never a VPN app: stopping it drops the connection; nor any app while the VPN list is unknown
+        const stoppable = mem.apps && mem.apps.includes(pkg) && pkg !== self() && mem.vpn && !mem.vpn.includes(pkg);
+        if (stoppable) r.append(busyButton('Stop', 'stop:' + p.name, () => stopOne(pkg), mem.busy));
         right.append(r);
       });
     }
-    return [heading('Free up memory'), columns(left, right)];
+    return [heading('Free up memory', null, !m), columns(left, right)];   // meminfo takes ~8.5 s on a TV
   }
 
   function keepScreen() {
-    const out = [heading('Never close')];
+    const out = [heading('Never close', null, !mem.info)];
     if (!mem.info) return out;
-    if (!mem.apps) return out.concat(el('p', 'note', FAIL));
+    if (!mem.apps) return out.concat(el('p', 'note', mem.appsFail));
     const grid = el('div', 'grid two');
     mem.apps.filter(p => p !== self()).sort().forEach(p => {
       const t = toggle('keep:' + p, mem.keep.includes(p), [el('p', 'name', p)], () => setKeep(p));
@@ -144,7 +154,7 @@
 
   /** One column: package names need the width more than the two buttons need a column of their own. */
   function tidyScreen() {
-    const d = tidy.disk, out = [heading('Restart and tidy')], top = el('div', 'actions'), bar = el('div', 'bar');
+    const d = tidy.disk, out = [heading('Restart and tidy', null, !d)], top = el('div', 'actions'), bar = el('div', 'bar');
     bar.append(kit.button('Restart TV', 'restart', null, () => kit.ask('Restart the TV now?', 'Restart', () => tool('reboot'))),
                busyButton('Clear all app caches', 'trim', () => clean('trimCaches'), tidy.busy));
     top.append(bar);
@@ -153,8 +163,8 @@
     if (!d) return out;
     if (d.ok) out.push(el('p', 'big', `Free space: ${size(d.free)}`));
     out.push(el('h3', 'title', 'Biggest apps'));
-    const apps = d.ok ? Tools.appSizes(d.text).slice(0, 6) : [], each = kit.device().sdk >= 34;
-    if (!apps.length) out.push(el('p', 'note', FAIL));
+    const apps = d.ok ? Tools.lessCleared(Tools.appSizes(d.text), tidy.cleared).slice(0, 6) : [], each = kit.device().sdk >= 34;
+    if (!apps.length) out.push(el('p', 'note', why(d)));
     apps.forEach(a => {
       const cache = a.cache >= 1e6, r = row(a.pkg, size(a.total), cache ? 'Cache ' + size(a.cache) : null);
       if (each && cache) r.append(busyButton('Clear cache', 'cache:' + a.pkg, () => clean('clearCache', a.pkg), tidy.busy));
@@ -169,7 +179,8 @@
     const grid = el('div', 'grid two');
     health.rows.slice().sort((a, b) => rank(a) - rank(b)).forEach(r => grid.append(checkRow(r)));
     if (health.file) grid.append(mark('grey', health.file === 'missing' ? 'Your checks file is missing.' : "Your checks file can't be read."));
-    return [heading('Nuvio health check', kit.button('Check again', 'again', null, runHealth), health.running), grid];
+    const out = [heading('Nuvio health check', kit.button('Check again', 'again', null, runHealth), health.running), grid];
+    return health.error ? out.concat(el('p', 'note', health.error)) : out;
   }
 
   function checkRow(r) {
@@ -185,7 +196,7 @@
     const out = [heading('Network check', kit.button('Check again', 'again', null, runNetwork), net.running)], n = net.answer;
     if (net.running) return out.concat(el('p', 'big', 'This can take up to a minute.'));   // nothing lands until it all has
     if (!n) return out;
-    if (typeof n !== 'object' || n.ok === false) return out.concat(el('p', 'note', FAIL));
+    if (typeof n !== 'object' || n.ok === false) return out.concat(el('p', 'note', why(n)));
     if (n.error) return out.concat(el('p', 'note', 'The network check failed. Try again.'));   // the check broke, not the network
     const facts = el('div', 'facts'), dns = el('div');
     netLines(n).forEach(t => facts.append(el('p', null, t)));
@@ -201,13 +212,13 @@
     const w = n.wifi || {}, p = n.ping || {}, dns = n.privateDns || {};
     const wifi = 'Wi-Fi' + (w.mbps > 0 ? `, ${w.mbps} Mb/s` : '') + (w.rssi > -127 && w.rssi < 0 ? `, signal ${w.rssi} dBm` : '');   // -1 / -127: unknown
     return [
-      'Connection: ' + (n.type === 'ethernet' ? 'Wired' : n.type === 'wifi' ? wifi : 'Other'),
+      'Connection: ' + (n.type === 'ethernet' ? 'Wired' : n.type === 'wifi' ? wifi : 'Other') + (n.vpn === true ? ', through a VPN' : ''),
       'Router ping: ' + ping(p.gateway),
       'Internet ping: ' + ping(p.internet),
       'Download speed: ' + (typeof n.speedMbps === 'number' ? Math.round(n.speedMbps) + ' Mb/s' : 'no answer'),
       'DNS servers: ' + (Array.isArray(n.dns) && n.dns.length ? n.dns.join(', ') : 'none found'),
       'Private DNS: ' + (dns.active ? 'on' + (dns.name ? ', ' + dns.name : '') : 'off'),
-    ];
+    ].concat(n.vpn === true ? "The TV's DNS comes from the VPN while it is on." : []);
   }
 
   // ---- what each screen does ----
@@ -215,8 +226,8 @@
   function open(id, key) {
     view = id;
     if (id === 'home') readExpiry();
-    else if (id === 'memory') { mem.result = null; loadKeep(); readMemory(); }
-    else if (id === 'tidy') { tidy.result = null; tool('diskstats').then(d => { tidy.disk = d; draw(); }); }
+    else if (id === 'memory') { mem.result = null; mem.info = null; loadKeep(); readMemory(); }   // no info: Checking…
+    else if (id === 'tidy') { tidy.result = null; tidy.disk = null; tool('diskstats').then(d => { tidy.disk = d; draw(); }); }
     else if (id === 'health') runHealth();
     else if (id === 'network') runNetwork();
     draw(key || null);                               // null: the first thing on the new screen
@@ -225,21 +236,26 @@
   async function readExpiry() {
     const r = await tool('expiryGet');
     expiry = !!r.ok && r.text === '0';
+    expiryNote = r.ok ? null : why(r);
     draw();
   }
 
   async function stopExpiry() {
     if (expiryBusy) return;
     expiryBusy = true;
-    await tool('expiryOff');
-    await readExpiry();
-    expiryBusy = false;
+    try {
+      const r = await tool('expiryOff');
+      expiryNote = r.ok ? null : why(r);
+      if (r.ok) await readExpiry(); else draw();
+    } finally { expiryBusy = false; }
   }
 
   async function readMemory() {
-    const a = await Promise.all([tool('meminfo'), tool('userApps')]);
+    const a = await Promise.all([tool('meminfo'), tool('userApps'), tool('vpnApps')]);
     mem.info = a[0];
     mem.apps = a[1].ok ? Tools.parseUserApps(a[1].text) : null;
+    mem.appsFail = why(a[1]);
+    mem.vpn = a[2].ok && Array.isArray(a[2].apps) ? a[2].apps : null;
     draw();
   }
 
@@ -259,19 +275,23 @@
     draw();
   }
 
-  /** kill-all for the cached apps, then stop every user app not on the list, one after another. */
+  /** kill-all for the cached apps, then stop every user app not on the list, one after another. Never this app or a VPN app
+   *  (stopping one drops the TV's connection), whatever the list says; when the VPN apps can't be read, nothing is stopped. */
   async function closeApps() {
     mem.busy = true;
     mem.result = null;
     draw();
     const keep = await loadKeep(), before = await tool('meminfo');
     await tool('killAll');
-    const u = await tool('userApps'), apps = u.ok ? Tools.parseUserApps(u.text) : [];
-    for (const p of Tools.closable(apps, keep)) if (p !== self()) await tool('stopApp', p);   // never this app, whatever the list says
+    const u = await tool('userApps'), v = await tool('vpnApps'), apps = u.ok ? Tools.parseUserApps(u.text) : [];
+    const vpn = v.ok && Array.isArray(v.apps) ? v.apps : null;
+    for (const p of vpn ? Tools.closable(apps, keep, vpn.concat(self())) : []) await tool('stopApp', p);
     const after = await tool('meminfo');
     mem.info = after;
     if (u.ok) mem.apps = apps;
-    mem.result = before.ok && after.ok ? `Freed ${Math.max(0, Math.round((after.avail - before.avail) / 1e6))} MB` : FAIL;
+    if (vpn) mem.vpn = vpn;
+    mem.result = !vpn ? why(v) : before.ok && after.ok ? `Freed ${Math.max(0, Math.round((after.avail - before.avail) / 1e6))} MB`
+      : why(before.ok ? after : before);
     mem.busy = false;
     draw();
   }
@@ -285,13 +305,15 @@
     draw();
   }
 
-  /** trimCaches (every app) or clearCache (one app), then the sizes again. */
+  /** trimCaches (every app) or clearCache (one app), then the sizes again: free space fresh from Android, the app list less
+   *  what was cleared (diskstats' app sizes are only counted once a day, see Tools.lessCleared). */
   async function clean(name, pkg) {
     tidy.busy = true;
     tidy.result = null;
     draw();
-    const r = await tool(name, pkg);
-    tidy.result = !r.ok ? FAIL : name === 'trimCaches' ? `Free space: ${size(r.before)} → ${size(r.after)}` : null;
+    const r = await tool(name, pkg), trim = name === 'trimCaches';
+    if (r.ok && (trim || /Success/.test(r.text))) tidy.cleared.push(trim ? '*' : pkg);   // pm clear prints Success, or why not
+    tidy.result = !r.ok ? why(r) : trim ? `Free space: ${size(r.before)} → ${size(r.after)}` : null;
     tidy.disk = await tool('diskstats');
     tidy.busy = false;
     draw();
@@ -301,8 +323,10 @@
   function runHealth() {
     if (health.running) return;
     const cfg = Tools.healthConfig(TV.healthText());
-    health = { running: true, rows: [], file: cfg.error, checks: cfg.checks };
-    expect('healthDone', () => TV.health(JSON.stringify(cfg.checks))).then(() => { health.running = false; draw(); });
+    health = { running: true, rows: [], file: cfg.error, checks: cfg.checks, error: null };
+    // HEALTH_GAP counts from the last row (onHealthRow restarts it), not from the start: a slow check is not a quiet TV
+    expect('healthDone', () => TV.health(JSON.stringify(cfg.checks)), HEALTH_GAP)
+      .then(r => { health.running = false; health.error = r.ok === false ? why(r) : null; draw(); });
     draw();
   }
 
@@ -310,7 +334,7 @@
     if (net.running) return;
     const hosts = Tools.healthConfig(TV.healthText()).checks.map(c => new URL(c.url !== undefined ? c.url : c.base).hostname);
     net = { running: true, answer: null };
-    expect('network', () => TV.network(JSON.stringify(hosts.filter((h, i) => hosts.indexOf(h) === i))))
+    expect('network', () => TV.network(JSON.stringify(hosts.filter((h, i) => hosts.indexOf(h) === i))), 120000)   // Java: ~100 s at worst
       .then(a => { net = { running: false, answer: a }; draw(); });
     draw();
   }
@@ -332,13 +356,11 @@
       return true;
     },
 
-    onResult(name, r) {
-      const q = waiting[name];
-      if (q && q.length) q.shift()(r || {});
-    },
+    onResult(name, r) { waiting.answer(name, r); },
 
+    /** A row of the running check. alive() is false while Java is still sending a timed-out run's rows: they are dropped. */
     onHealthRow(row) {
-      if (!health.running || !row) return;
+      if (!waiting.alive('healthDone') || !health.running || !row) return;
       health.rows.push(row);
       draw();
     },

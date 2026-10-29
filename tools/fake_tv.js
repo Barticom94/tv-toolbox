@@ -3,7 +3,8 @@
 // plus two made-up examples, together covering every card state.
 // Query words: setup (can't install yet), fire (a Fire TV), offline (saved copy), nocopy (offline, nothing saved),
 // empty (an empty store), tools (Tools approved), hold (installs wait for app.onProgress/onInstalled from the console),
-// nofile / badfile (health.json missing / not JSON), wired (Ethernet in the network check), neterror (the network check breaks).
+// nofile / badfile (health.json missing / not JSON), wired (Ethernet in the network check), vpn (a VPN is on in the network
+// check), neterror (the network check breaks).
 // Tools answers read tools/fixtures/ with fetch, so a Tools preview needs a server whose CSP allows connect-src 'self'
 // (the APK's CSP allows no connections, and the APK never loads this file).
 // Every bridge call is recorded in TV.log.
@@ -50,13 +51,14 @@
 
   // ---- Tools: the fixtures, plus made-up hosts under example.com and documentation addresses (RFC 5737) ----
   const fixture = name => fetch('../../tools/fixtures/' + name).then(r => r.text()).catch(() => '');
-  const KB = 1024, MB = 1e6;
+  const KB = 1024, MB = 1e6, VPN = 'com.example.vpn';   // a made-up VPN app: Close background apps must never stop it
   let freed = 0, free = 18759292 * KB, expiryOff = false, keep = null;
   const ping = (ip, avg) => `PING ${ip} (${ip}) 56(84) bytes of data.\n\n--- ${ip} ping statistics ---\n`
     + `5 packets transmitted, 5 received, 0% packet loss, time 4006ms\nrtt min/avg/max/mdev = ${(avg * .8).toFixed(3)}/${avg.toFixed(3)}/${(avg * 1.3).toFixed(3)}/0.210 ms\n`;
   const tools = {
     meminfo: async () => ({ text: await fixture('meminfo.txt'), total: 3962200 * KB, avail: 1646238 * KB + freed }),
-    userApps: () => ({ text: Object.keys(installed).map(p => 'package:' + p).join('\n') + '\n' }),
+    userApps: () => ({ text: Object.keys(installed).concat(VPN).map(p => 'package:' + p).join('\n') + '\n' }),
+    vpnApps: () => ({ apps: [VPN] }),
     killAll: () => { freed += 180 * MB; return { text: '' }; },
     stopApp: () => { freed += 45 * MB; return { text: '' }; },
     forceStop: () => ({ text: '' }),
@@ -146,7 +148,7 @@
           gateway: null, ping: { gateway: null, internet: null }, speedMbps: null, lookups: [] }), 400);
         return;
       }
-      later(() => app.onResult('network', { type: has('wired') ? 'ethernet' : 'wifi', wifi: has('wired') ? null : { rssi: -58, mbps: 433 },
+      later(() => app.onResult('network', { type: has('wired') ? 'ethernet' : 'wifi', vpn: has('vpn'), wifi: has('wired') ? null : { rssi: -58, mbps: 433 },
         dns: ['192.0.2.53'], privateDns: { active: false, name: null }, gateway: '192.0.2.1',
         ping: { gateway: ping('192.0.2.1', 2.405), internet: ping('1.1.1.1', 14.8) }, speedMbps: 87.4, lookups }), 400);
     },

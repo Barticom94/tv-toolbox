@@ -3,7 +3,8 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 const require = createRequire(import.meta.url);
-const { topMemory, appSizes, parseUserApps, closable, rowState, blame, aioMessage, dnsVerdict, healthConfig, pingAvg } = require('../assets/ui/tools.js');
+const { topMemory, appSizes, parseUserApps, closable, lessCleared, rowState, blame, aioMessage, dnsVerdict, healthConfig, pingAvg, NO_ANSWER, Waiters } = require('../assets/ui/tools.js');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const eq = (name, got, want) => { assert.deepStrictEqual(got, want, name); console.log('PASS ' + name); };
 const ok = (name, cond) => { assert.ok(cond, name); console.log('PASS ' + name); };
@@ -31,12 +32,19 @@ eq('diskstats length mismatch', appSizes('Package Names: ["a","b"]\nApp Sizes: [
 eq('diskstats array missing', appSizes('Package Names: ["a"]\nApp Sizes: [1]\nApp Data Sizes: [1]'), []);
 eq('diskstats array not json', appSizes('Package Names: ["a"]\nApp Sizes: [1]\nApp Data Sizes: [1]\nCache Sizes: [oops'), []);
 eq('diskstats garbage', appSizes('nothing here'), []);
+const two = appSizes('Package Names: ["a","b"]\nApp Sizes: [100,50]\nApp Data Sizes: [30,200]\nCache Sizes: [20,180]');
+eq('cleared one app: its cache comes off, the rest stand', lessCleared(two, ['b']), [{ pkg: 'a', app: 100, data: 30, cache: 20, total: 130 }, { pkg: 'b', app: 50, data: 20, cache: 0, total: 70 }]);
+eq('cleared every app', lessCleared(two, ['*']).map(s => [s.pkg, s.cache, s.total]), [['a', 0, 110], ['b', 0, 70]]);
+eq('nothing cleared: as read', lessCleared(two, []), two);
 
 // which apps to close
 eq('user apps', parseUserApps('package:com.nuvio.tv\npackage:com.spotify.tv.android\n'), ['com.nuvio.tv', 'com.spotify.tv.android']);
 eq('user apps ignore blank and odd lines, CRLF', parseUserApps('package:a.b\r\n\r\nWarning: x\r\npackage:c.d\r\n'), ['a.b', 'c.d']);
 eq('closable', closable(['b.app', 'com.nuvio.tv', 'a.app'], ['com.nuvio.tv']), ['a.app', 'b.app']);
 eq('closable with nothing kept', closable(['b', 'a'], []), ['a', 'b']);
+eq('vpn app never closable, even when not kept', closable(['b.app', 'com.example.vpn', 'a.app'], [], ['com.example.vpn']), ['a.app', 'b.app']);
+eq('vpn app never closable, kept or not', closable(['com.example.vpn', 'a.app'], ['com.example.vpn'], ['com.example.vpn', 'local.adam.tvtoolbox']), ['a.app']);
+eq('this app never closable', closable(['local.adam.tvtoolbox', 'a.app'], [], ['local.adam.tvtoolbox']), ['a.app']);
 
 // health row colours
 eq('green', rowState({ code: 200, ms: 300 }), 'green');
@@ -109,3 +117,44 @@ eq('ping: toybox style summary', pingAvg('round-trip min/avg/max = 1.0/3.5/6.0 m
 eq('ping: everything lost', pingAvg('3 packets transmitted, 0 received, 100% packet loss, time 2050ms'), null);
 eq('ping: nothing', pingAvg(''), null);
 eq('ping: null', pingAvg(null), null);
+
+// waiting for Java: a timed-out wait ends with the error and swallows its own late answer
+{
+  const w = new Waiters();
+  const first = w.wait('meminfo', 20);
+  await sleep(40);
+  eq('no answer in time', await first, { ok: false, error: NO_ANSWER });
+  eq('the error text', NO_ANSWER, 'No answer from the TV. Try again.');
+  const second = w.wait('meminfo', 1000);
+  w.answer('meminfo', { ok: true, text: 'late, for the first' });
+  w.answer('meminfo', { ok: true, text: 'for the second' });
+  eq('late answer is thrown away, never handed on', await second, { ok: true, text: 'for the second' });
+  const a = w.wait('x', 1000), b = w.wait('x', 1000);
+  w.answer('x', { n: 1 }); w.answer('x', { n: 2 });
+  eq('answers go oldest first', [await a, await b], [{ n: 1 }, { n: 2 }]);
+  w.answer('x', { n: 3 });
+  ok('an answer nobody waits for is dropped', (w.q.x || []).length === 0);
+  const empty = w.wait('y', 1000); w.answer('y', null);
+  eq('a null answer is {}', await empty, {});
+  const fast = w.wait('z', 20), slow = w.wait('z', 1000);
+  await sleep(40);
+  w.answer('z', 'late'); w.answer('z', { ok: true });
+  eq('the next wait gets its own answer after a dead one', [await fast, await slow], [{ ok: false, error: NO_ANSWER }, { ok: true }]);
+}
+{
+  const w = new Waiters();
+  eq('alive with no wait', w.alive('healthDone'), false);
+  const run = w.wait('healthDone', 150);
+  let settled = false;
+  run.then(() => { settled = true; });
+  for (let i = 0; i < 4; i++) { await sleep(60); ok('a row restarts the clock ' + (i + 1), w.alive('healthDone') && !settled); }
+  await sleep(300);
+  eq('no rows for a while: no answer', await run, { ok: false, error: NO_ANSWER });
+  eq('rows after the timeout belong to the dead run', w.alive('healthDone'), false);
+  const again = w.wait('healthDone', 1000);
+  eq('old run still draining: its rows are dropped', w.alive('healthDone'), false);
+  w.answer('healthDone', {});                                   // the old run's done, swallowed
+  eq('then the new run takes rows', w.alive('healthDone'), true);
+  w.answer('healthDone', {});
+  eq('new run done', await again, {});
+}

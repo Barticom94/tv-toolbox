@@ -71,7 +71,7 @@ public class Health {
     static final Pattern BETA = Pattern.compile("alpha|beta|rc", Pattern.CASE_INSENSITIVE);
     static final Pattern HOST = Pattern.compile("[A-Za-z0-9][A-Za-z0-9.-]{0,252}");   // goes into a URL unescaped: letters, digits, dots, hyphens only
     /** What network() returns when the check itself fails (not when the TV has no network): `error` is only ever there. */
-    private static final String FAILED_NET = "{\"error\":true,\"type\":\"other\",\"wifi\":null,\"dns\":[],\"privateDns\":{\"active\":false,\"name\":null},"
+    private static final String FAILED_NET = "{\"error\":true,\"type\":\"other\",\"vpn\":false,\"wifi\":null,\"dns\":[],\"privateDns\":{\"active\":false,\"name\":null},"
             + "\"gateway\":null,\"ping\":{\"gateway\":null,\"internet\":null},\"speedMbps\":null,\"lookups\":[]}";
 
     private final Context c;
@@ -373,10 +373,10 @@ public class Health {
 
     // ---- the network check ----
 
-    /** The IPv4 router on the default route, or null. */
+    /** The IPv4 router on the default route, or null. A VPN's default route has 0.0.0.0 there (no router), which pings this TV. */
     static String gateway(LinkProperties lp) {
         if (lp != null) for (RouteInfo r : lp.getRoutes())
-            if (r.isDefaultRoute() && r.getGateway() instanceof Inet4Address) return r.getGateway().getHostAddress();
+            if (r.isDefaultRoute() && r.getGateway() instanceof Inet4Address && !r.getGateway().isAnyLocalAddress()) return r.getGateway().getHostAddress();
         return null;
     }
 
@@ -389,12 +389,17 @@ public class Health {
             Network n = cm.getActiveNetwork();
             NetworkCapabilities caps = n == null ? null : cm.getNetworkCapabilities(n);
             LinkProperties lp = n == null ? null : cm.getLinkProperties(n);
-            String type = caps == null ? "other" : caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ? "ethernet"
-                    : caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ? "wifi" : "other";
+            // With a VPN on, the active network is the tunnel: DNS stays its (that is what the TV uses), while the
+            // connection type and the router come from the real network underneath.
+            boolean vpn = caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
+            Network base = vpn ? underlying(cm) : n;
+            NetworkCapabilities baseCaps = base == null ? null : cm.getNetworkCapabilities(base);
+            String type = baseCaps == null ? "other" : baseCaps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ? "ethernet"
+                    : baseCaps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ? "wifi" : "other";
             JSONArray dns = new JSONArray();
             if (lp != null) for (InetAddress a : lp.getDnsServers()) dns.put(a.getHostAddress());
-            String gw = gateway(lp);
-            JSONObject o = new JSONObject().put("type", type).put("wifi", "wifi".equals(type) ? nz(wifi()) : JSONObject.NULL).put("dns", dns)
+            String gw = gateway(base == null ? null : cm.getLinkProperties(base));
+            JSONObject o = new JSONObject().put("type", type).put("vpn", vpn).put("wifi", "wifi".equals(type) ? nz(wifi()) : JSONObject.NULL).put("dns", dns)
                     .put("privateDns", new JSONObject().put("active", lp != null && lp.isPrivateDnsActive())
                             .put("name", nz(lp == null ? null : lp.getPrivateDnsServerName())))
                     .put("gateway", nz(gw));
@@ -413,6 +418,16 @@ public class Health {
     }
 
     private static Object nz(Object v) { return v == null ? JSONObject.NULL : v; }
+
+    /** The network a VPN runs over: the first one with internet that isn't a VPN itself, or null. */
+    @SuppressWarnings("deprecation")                        // getAllNetworks is deprecated from API 31 but still lists every network
+    private static Network underlying(ConnectivityManager cm) {
+        for (Network m : cm.getAllNetworks()) {
+            NetworkCapabilities mc = cm.getNetworkCapabilities(m);
+            if (mc != null && !mc.hasTransport(NetworkCapabilities.TRANSPORT_VPN) && mc.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return m;
+        }
+        return null;
+    }
 
     @SuppressWarnings("deprecation")                        // getConnectionInfo is deprecated from API 31 but still answers rssi and link speed
     private JSONObject wifi() throws JSONException {

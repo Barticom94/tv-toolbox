@@ -8,7 +8,7 @@
     if (text != null) e.textContent = text;
     return e;
   };
-  const FAILED = 'Install failed', MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const FAILED = 'Install failed', CANCELLED = 'Cancelled', MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
   let device = {}, answer = null, list = null, toolsOn = false, tab = 'apps', focused = null, shown = false;
   let swap = null;                                  // {id, resumed}: a Swap it waiting for the uninstall screen to close
@@ -60,7 +60,7 @@
     if (queue.running === id) return progress[id] >= 100 ? 'Installing…' : `Downloading ${progress[id] || 0}%`;
     if (queue.waiting.includes(id)) return 'Waiting to install';
     const m = notes[id];
-    return m == null ? '' : m === FAILED ? FAILED : FAILED + '\n' + m;   // Android's message verbatim, under a plain line
+    return m == null ? '' : m === FAILED || m === CANCELLED ? m : FAILED + '\n' + m;   // Android's message verbatim, under a plain line
   }
 
   function statusEl(id) {

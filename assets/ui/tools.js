@@ -36,10 +36,20 @@
   /** Package names from `pm list packages -3` (`package:com.example.app` lines). */
   const parseUserApps = text => lines(text).map(l => /^package:([A-Za-z0-9_.]+)\s*$/.exec(l)).filter(Boolean).map(m => m[1]);
 
-  /** The user apps Close background apps may stop: everything except the keep list, in a steady order. */
-  function closable(userApps, keep) {
-    const kept = new Set(keep);
+  /** The user apps Close background apps may stop: everything except the keep list and `never` (the VPN apps and this app,
+   *  whatever the keep list says), in a steady order. */
+  function closable(userApps, keep, never) {
+    const kept = new Set(keep.concat(never || []));
     return userApps.filter(p => !kept.has(p)).sort();
+  }
+
+  /** diskstats' per-app sizes are Android's once-a-day count (/data/system/diskstats_cache.json), so a clear never shows in them
+   *  by reading again. These sizes with the caches this page cleared taken off; `cleared` holds package names, '*' for every app.
+   *  ponytail: kept for the page's life; if Android counts again meanwhile, a fresh small cache is zeroed too. */
+  function lessCleared(sizes, cleared) {
+    const all = cleared.includes('*');
+    return sizes.map(s => all || cleared.includes(s.pkg) ? Object.assign({}, s, { data: s.data - s.cache, cache: 0, total: s.total - s.cache }) : s)
+      .sort((a, b) => b.total - a.total);
   }
 
   /** A health row's colour. Unreadable is grey; the worst thing wrong decides between red and amber. */
@@ -101,6 +111,40 @@
     return m ? Number(m[1]) : null;
   }
 
-  const Tools = { topMemory, appSizes, parseUserApps, closable, rowState, blame, aioMessage, dnsVerdict, healthConfig, pingAvg };
+  const NO_ANSWER = 'No answer from the TV. Try again.';
+
+  /** Java's answers by name, oldest wait first: Java runs each kind in the order asked and sends no request id. A wait that
+   *  gets nothing for `ms` ends with {ok:false, error: NO_ANSWER} but keeps its place, dead, so its late answer is swallowed
+   *  instead of being handed to the next wait of that name. */
+  class Waiters {
+    constructor() { this.q = {}; }
+
+    /** The next answer to `name`. Queued at once, so send the request after calling this. */
+    wait(name, ms) {
+      return new Promise(res => {
+        const s = { dead: false, res };
+        s.arm = () => { clearTimeout(s.t); s.t = setTimeout(() => { s.dead = true; res({ ok: false, error: NO_ANSWER }); }, ms); };
+        s.arm();
+        (this.q[name] = this.q[name] || []).push(s);
+      });
+    }
+
+    /** Java answered `name`: the oldest wait gets it, or swallows it when that wait already gave up. */
+    answer(name, r) {
+      const s = (this.q[name] || []).shift();
+      if (s && !s.dead) { clearTimeout(s.t); s.res(r || {}); }
+    }
+
+    /** Java is still at work on `name` (a health row came in): the oldest live wait's clock starts again. False when there is
+     *  no wait or the oldest gave up, so what came in belongs to that one and is dropped. */
+    alive(name) {
+      const q = this.q[name] || [], live = q.find(s => !s.dead);
+      if (live) live.arm();
+      return q.length > 0 && !q[0].dead;
+    }
+  }
+
+  const Tools = { topMemory, appSizes, parseUserApps, closable, lessCleared, rowState, blame, aioMessage, dnsVerdict, healthConfig, pingAvg,
+    NO_ANSWER, Waiters };
   if (typeof module === 'object') module.exports = Tools; else window.Tools = Tools;
 })();
