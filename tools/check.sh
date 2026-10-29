@@ -4,3 +4,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 PY=${PY:-python}
 "$PY" -I tools/check_catalog.py
+node tools/check_store.mjs
