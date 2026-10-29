@@ -154,7 +154,7 @@
 
   /** One column: package names need the width more than the two buttons need a column of their own. */
   function tidyScreen() {
-    const d = tidy.disk, out = [heading('Restart and tidy', null, !d)], top = el('div', 'actions'), bar = el('div', 'bar');
+    const d = tidy.disk, out = [heading('Restart and tidy', null, !d || tidy.busy)], top = el('div', 'actions'), bar = el('div', 'bar');
     bar.append(kit.button('Restart TV', 'restart', null, () => kit.ask('Restart the TV now?', 'Restart', () => tool('reboot'))),
                busyButton('Clear all app caches', 'trim', () => clean('trimCaches'), tidy.busy));
     top.append(bar);
@@ -285,12 +285,15 @@
     await tool('killAll');
     const u = await tool('userApps'), v = await tool('vpnApps'), apps = u.ok ? Tools.parseUserApps(u.text) : [];
     const vpn = v.ok && Array.isArray(v.apps) ? v.apps : null;
-    for (const p of vpn ? Tools.closable(apps, keep, vpn.concat(self())) : []) await tool('stopApp', p);
+    let quiet = false;                                  // a stop got no answer: the TV went quiet, so stop asking and say so
+    for (const p of vpn ? Tools.closable(apps, keep, vpn.concat(self())) : []) {
+      if ((await tool('stopApp', p)).error === NO_ANSWER) { quiet = true; break; }
+    }
     const after = await tool('meminfo');
     mem.info = after;
     if (u.ok) mem.apps = apps;
     if (vpn) mem.vpn = vpn;
-    mem.result = !vpn ? why(v) : before.ok && after.ok ? `Freed ${Math.max(0, Math.round((after.avail - before.avail) / 1e6))} MB`
+    mem.result = quiet ? NO_ANSWER : !vpn ? why(v) : before.ok && after.ok ? `Freed ${Math.max(0, Math.round((after.avail - before.avail) / 1e6))} MB`
       : why(before.ok ? after : before);
     mem.busy = false;
     draw();

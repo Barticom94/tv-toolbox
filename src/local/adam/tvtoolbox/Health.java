@@ -12,6 +12,7 @@ import android.net.RouteInfo;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.SystemClock;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -71,7 +72,7 @@ public class Health {
     static final Pattern BETA = Pattern.compile("alpha|beta|rc", Pattern.CASE_INSENSITIVE);
     static final Pattern HOST = Pattern.compile("[A-Za-z0-9][A-Za-z0-9.-]{0,252}");   // goes into a URL unescaped: letters, digits, dots, hyphens only
     /** What network() returns when the check itself fails (not when the TV has no network): `error` is only ever there. */
-    private static final String FAILED_NET = "{\"error\":true,\"type\":\"other\",\"vpn\":false,\"wifi\":null,\"dns\":[],\"privateDns\":{\"active\":false,\"name\":null},"
+    static final String FAILED_NET = "{\"error\":true,\"type\":\"other\",\"vpn\":false,\"wifi\":null,\"dns\":[],\"privateDns\":{\"active\":false,\"name\":null},"
             + "\"gateway\":null,\"ping\":{\"gateway\":null,\"internet\":null},\"speedMbps\":null,\"lookups\":[]}";
 
     private final Context c;
@@ -413,6 +414,7 @@ public class Health {
             Thread.currentThread().interrupt();
             return FAILED_NET;
         } catch (Exception e) {
+            Log.w(MainActivity.TAG, "network failed: " + e.getClass().getSimpleName());   // class only: a message could hold a URL
             return FAILED_NET;
         }
     }

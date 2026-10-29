@@ -317,8 +317,15 @@ public class MainActivity extends Activity {
          *  "gateway"/"internet"); every other tool gets null, whatever the page passed. */
         @JavascriptInterface public void tool(String name, String arg) {
             boolean takesArg = "stopApp".equals(name) || "forceStop".equals(name) || "clearCache".equals(name) || "ping".equals(name);
-            tools.execute(() -> js("app.onResult(" + q(name == null ? "" : name) + ","
-                    + MainActivity.this.tool(name, takesArg ? arg : null).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029") + ")"));
+            tools.execute(() -> {
+                String r;                                   // exactly one answer per request, even for an Error: the page matches answers to requests by name, in order
+                try { r = MainActivity.this.tool(name, takesArg ? arg : null); }
+                catch (Throwable t) {
+                    Log.w(TAG, "tool " + name + " failed: " + t.getClass().getSimpleName());
+                    r = "{\"ok\":false,\"error\":\"failed\"}";
+                }
+                js("app.onResult(" + q(name == null ? "" : name) + "," + esc(r) + ")");
+            });
         }
 
         /** The text of health.json (the checks file on this TV), or null when it is missing. The page validates it. */
@@ -332,7 +339,15 @@ public class MainActivity extends Activity {
 
         /** Answers with app.onResult("network", json) after up to a minute; hostsJson = a JSON array of extra hosts to look up. */
         @JavascriptInterface public void network(String hostsJson) {
-            net.execute(() -> js("app.onResult(\"network\"," + esc(health.network(hostsJson)) + ")"));
+            net.execute(() -> {
+                String r;                                   // one answer, even for an Error (see tool)
+                try { r = health.network(hostsJson); }
+                catch (Throwable t) {
+                    Log.w(TAG, "network failed: " + t.getClass().getSimpleName());
+                    r = Health.FAILED_NET;
+                }
+                js("app.onResult(\"network\"," + esc(r) + ")");
+            });
         }
 
         /** The saved "Never close" list as a JSON array, or null before the page has saved one (the page then fills in defaults). */
