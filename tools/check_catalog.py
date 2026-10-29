@@ -126,6 +126,9 @@ class Fake:
     def prev_icon(self, id):
         return self._prev_icons.get(id)
 
+    def own_icon(self, name):
+        return b"OWN:" + name.encode()
+
 
 def app(id="nuvio", **more):
     return {"id": id, "name": id.title(), "blurb": "Blurb.", "package": "com.nuvio.tv",
@@ -156,6 +159,25 @@ def new_release_is_read_once_per_file():
         ("armeabi-v7a", "https://github.com/o/r/releases/download/t/app-full-armeabi-v7a-release.apk", "11:2026-01-01T00:00:00Z"),
         ("universal", "https://github.com/o/r/releases/download/t/app-full-universal-release.apk", "12:2026-01-01T00:00:00Z")]
     assert list(e["files"][0]) == ["abi", "url", "size", "sha256", "key", "versionCode", "versionName"]
+
+
+@check
+def an_icon_in_apps_json_beats_the_apk():
+    fx = Fake(releases={"o/nuvio": [release()]}, icon_png=None)
+    cat, icons, errs = build([app(icon="icons/nuvio.png")], {"apps": []}, fx)
+    assert errs == [] and icons == {"nuvio": b"OWN:icons/nuvio.png"}
+    assert list(cat["apps"][0])[:5] == ["id", "name", "blurb", "icon", "package"] and cat["apps"][0]["icon"] == ICON
+    # unchanged next run (carried, nothing on Pages yet): the repo icon is still listed
+    cat, icons, errs = build([app(icon="icons/nuvio.png")], cat, fx)
+    assert len(fx.reads) == 2 and icons == {"nuvio": b"OWN:icons/nuvio.png"} and cat["apps"][0]["icon"] == ICON
+
+
+@check
+def every_icon_named_in_apps_json_is_a_png():
+    with open(bc.APPS_JSON, encoding="utf-8") as f:
+        for a in json.load(f)["apps"]:
+            if "icon" in a:
+                bc.Fetch().own_icon(a["icon"])
 
 
 @check

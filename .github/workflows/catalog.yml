@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [apps.json, tools/build_catalog.py, .github/workflows/catalog.yml]
+    paths: [apps.json, icons/**, tools/build_catalog.py, .github/workflows/catalog.yml]
 
 permissions:
   contents: read

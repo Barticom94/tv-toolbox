@@ -31,50 +31,23 @@
                   "asset": "^SmartTube_stable_[0-9.]+_(armeabi-v7a|universal)\\.apk$" }
     },
     {
-      "id": "vlc",
-      "name": "VLC",
-      "blurb": "Plays video and music from a USB stick or another device.",
-      "package": "org.videolan.vlc",
-      "signer": "c8768d2cea0c4b622e419b4b4715981946821e4ebc035fb41776cad395a7f68e",
-      "source": { "type": "folder", "url": "https://download.videolan.org/pub/videolan/vlc-android/last/",
-                  "asset": "^VLC-Android-[0-9.]+-armeabi-v7a\\.apk$" }
-    },
-    {
-      "id": "localsend",
-      "name": "LocalSend",
-      "blurb": "Send photos and videos from your phone to the TV.",
-      "package": "org.localsend.localsend_app",
-      "signer": "3220c353a73cfbd0c2f3052471c445324cf452bcba26de1c473a52fe5c44e1d6",
-      "source": { "type": "github", "repo": "localsend/localsend", "channel": "stable",
-                  "asset": "^LocalSend-[0-9.]+-android-arm32v7\\.apk$" }
-    },
-    {
-      "id": "aerial-views",
-      "name": "Aerial Views",
-      "blurb": "A screensaver of slow aerial films.",
-      "package": "com.neilturner.aerialviews",
-      "signer": "383b3b2df6d2b17cec60542c576408b0deae502f37749eb5ac7fef2f206fa51b",
-      "source": { "type": "github", "repo": "theothernt/AerialViews", "channel": "stable",
-                  "asset": "^aerial-views-[0-9.]+\\.apk$" }
+      "id": "songsterr-tv",
+      "name": "Songsterr TV",
+      "blurb": "Guitar tabs that scroll along with the song.",
+      "package": "local.adam.tabremote",
+      "signer": "0e746d0830a4db1cb7300d49868550248a55ef2e69aec6091ee78101089dddfb",
+      "source": { "type": "github", "repo": "Barticom94/tv-toolbox", "tagPrefix": "songsterr-tv-",
+                  "asset": "^songsterr-tv\\.apk$" }
     },
     {
       "id": "projectivy",
       "name": "Projectivy",
       "blurb": "A simpler home screen with just your apps.",
+      "icon": "icons/projectivy.png",
       "package": "com.spocky.projengmenu",
       "signer": "f6697bf4082ee97511e4de07863193884a015b7ab5860430321bda1042b0aadd",
       "source": { "type": "github", "repo": "spocky/miproja1", "channel": "stable",
                   "asset": "^ProjectivyLauncher-[0-9.]+-c[0-9]+-xda-release\\.apk$" }
-    },
-    {
-      "id": "songsterr-tv",
-      "name": "Songsterr TV",
-      "blurb": "Test entry.",
-      "package": "local.adam.tabremote",
-      "signer": "0e746d0830a4db1cb7300d49868550248a55ef2e69aec6091ee78101089dddfb",
-      "hidden": true,
-      "source": { "type": "github", "repo": "Barticom94/tv-toolbox", "tagPrefix": "songsterr-tv-",
-                  "asset": "^songsterr-tv\\.apk$" }
     },
     {
       "id": "toolbox",

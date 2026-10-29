@@ -164,6 +164,9 @@ def build(apps: list[dict], prev: dict, fetch) -> tuple[dict, dict[str, bytes], 
         old = olds.get(app["id"])
         try:
             entry, png = _make_entry(app, old, fetch, now, reuse)
+            if app.get("icon"):  # a PNG kept in this repo, for an APK whose launcher icon is XML only
+                png = fetch.own_icon(app["icon"])
+                entry = {**_head(app, png), **entry}
         except Exception as e:  # one bad source must not take the others down; the old entry stays live
             errors.append(f"{app['id']}: {e if isinstance(e, ValueError) else repr(e)}")
             entry, png = _carry(app, old, fetch) if old else (None, None)
@@ -258,6 +261,13 @@ class Fetch:
             if e.code == 404:
                 return None
             raise  # build() lets this abort the run: a catalogue that silently lost its icons must not be deployed
+
+    def own_icon(self, name: str) -> bytes:
+        with open(os.path.join(os.path.dirname(APPS_JSON), name), "rb") as f:
+            png = f.read()
+        if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError(f"{name} is not a PNG")
+        return png
 
     def previous(self) -> dict:
         """The catalogue now live. Only a 404 (none yet) starts from empty. Anything else that fails, including a 200 that isn't
