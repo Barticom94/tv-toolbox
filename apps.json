@@ -40,6 +40,15 @@
                   "asset": "^snug\\.apk$" }
     },
     {
+      "id": "telly",
+      "name": "Telly",
+      "blurb": "Live UK TV with a Sky-style guide.",
+      "package": "local.adam.telly",
+      "signer": "22b5d145fad5e4192b5c7d1a8af9ece21155723877ee8d1f998ef46ee33948a5",
+      "source": { "type": "github", "repo": "Barticom94/telly", "channel": "stable",
+                  "asset": "^telly\\.apk$" }
+    },
+    {
       "id": "songsterr-tv",
       "name": "Songsterr TV",
       "blurb": "Guitar tabs that scroll along with the song.",
