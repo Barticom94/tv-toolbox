@@ -74,8 +74,10 @@ def parse_badging(text: str) -> dict:
 
     min_sdk = sdk("minSdkVersion", sdk("sdkVersion", 1))  # aapt2 prints minSdkVersion, aapt v1 sdkVersion; 1 is Android's own default
     icons = [(int(d), p) for d, p in re.findall(r"^application-icon-(\d+):'([^']*)'", text, re.M) if p.endswith(".png")]
+    # 65534/65535 are aapt's "any"/"none" pseudo-densities, which can name the smallest PNG: the largest real density wins.
+    real = [i for i in icons if i[0] < 65534]
     return {"package": at["name"], "versionCode": int(at["versionCode"]), "versionName": at["versionName"],
-            "minSdk": min_sdk, "targetSdk": sdk("targetSdkVersion", min_sdk), "icon": max(icons)[1] if icons else None}
+            "minSdk": min_sdk, "targetSdk": sdk("targetSdkVersion", min_sdk), "icon": max(real or icons)[1] if icons else None}
 
 
 def parse_certs(text: str) -> str:

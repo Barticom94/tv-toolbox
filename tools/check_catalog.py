@@ -81,6 +81,7 @@ def parse_badging_fields():
     assert parse_badging(B.replace("minSdkVersion:", "sdkVersion:'21'\nminSdkVersion:"))["minSdk"] == 24  # both: minSdkVersion wins
     assert parse_badging(B.replace("minSdkVersion:'24'\n", ""))["minSdk"] == 1
     assert parse_badging(B.replace("res/a.png", "res/a.xml").replace("res/b.png", "res/b.xml"))["icon"] is None
+    assert parse_badging(B + "application-icon-65534:'res/small.png'\n")["icon"] == "res/b.png"  # not the anydpi pick
 
 
 @check
