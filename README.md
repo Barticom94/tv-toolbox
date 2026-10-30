@@ -4,11 +4,11 @@ An app store for the family's Android TVs. It lists a few apps we use, installs 
 
 ## Installing it
 
-On the TV, open Downloader and type this address:
+On the TV, open Downloader and type the code **4236218**. Or type the full address:
 
     https://github.com/Barticom94/tv-toolbox/releases/download/toolbox/tv-toolbox.apk
 
-That link always serves the newest TV Toolbox.
+Both always serve the newest TV Toolbox. The code is an AFTVnews short link (aftv.news/4236218) to that address.
 
 ## Adding an app
 
