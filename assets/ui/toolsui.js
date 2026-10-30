@@ -103,7 +103,6 @@
 
   function home() {
     const sw = toggle('expiry', 'Never expire USB debugging', expiryNote || (expiry ? null : 'Otherwise the TV asks again after 7 days.'), !!expiry, stopExpiry);
-    if (expiry) sw.classList.remove('f');            // nothing can turn expiry back on, so once set it is a line, not a stop
     sw.classList.add('apart');
     return TILES.map(t => line('tile:' + t[0], t[1], null, null, () => open(t[0]))).concat(sw);
   }
@@ -235,7 +234,7 @@
   }
 
   async function stopExpiry() {
-    if (expiryBusy) return;
+    if (expiryBusy || expiry) return;                 // nothing turns expiry back on: once On, OK does nothing, like an Installed row
     expiryBusy = true;
     try {
       const r = await tool('expiryOff');

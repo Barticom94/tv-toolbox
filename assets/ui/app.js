@@ -13,6 +13,7 @@
   const TODO = ['Update', 'Try again'], DONE = ['Open', 'Installed', 'Turned off', 'Not for this TV'];
 
   let device = {}, answer = null, list = null, toolsOn = false, tab = 'apps', focused = null, shown = false, closeDialog = null;
+  let parked = null;                                // the open tab, held there because its page had nothing to focus yet
   let swap = null;                                  // {id, resumed}: a Swap waiting for the uninstall screen to close
   const queue = new Store.Queue(), progress = {}, notes = {}, keyFor = {};
   let parts = {};                                   // id → the row's live parts, repainted on progress without a redraw
@@ -97,7 +98,7 @@
     const b = el('button', 'pill f', text);
     b.dataset.key = key;
     if (card) b.dataset.card = card;
-    b.onclick = fn;
+    b.onclick = e => { e.stopPropagation(); fn(); };   // a button inside a row must not run the row's own action too
     return b;
   }
 
@@ -206,6 +207,7 @@
     if (focused) focused.classList.remove('focus');
     document.querySelectorAll('.within').forEach(c => c.classList.remove('within'));
     focused = e || null;
+    if (e !== parked) parked = null;
     if (!e) return;
     e.classList.add('focus');
     const row = e.closest('.row'), page = e.closest('.page');
@@ -216,11 +218,19 @@
     else (row || e).scrollIntoView({ block: 'nearest' });
   }
 
-  /** Focus by key, else something on the same row, else the first thing on the page. */
+  /** Focus by key, else something on the same row, else the first thing on the page, else the open tab (parked until there is). */
   function restore(key, card) {
-    const all = focusables();
-    focus((key && all.find(e => e.dataset.key === key)) || (card && all.find(e => e.dataset.card === card))
-      || all.find(e => !e.classList.contains('tab')) || all[0]);
+    const all = focusables(), pick = (key && all.find(e => e.dataset.key === key)) || (card && all.find(e => e.dataset.card === card))
+      || all.find(e => !e.classList.contains('tab'));
+    focus(pick || document.querySelector('.tab.on') || all[0]);
+    parked = pick ? null : focused;
+  }
+
+  /** From the open tab into its page: where the focus last was there, else its first stop. False when it has none (About). */
+  function enter() {
+    const k = keyFor[tab] || [], inPage = focusables().filter(e => $(tab).contains(e));
+    if (inPage.length) focus(inPage.find(e => e.dataset.key === k[0]) || inPage[0]);
+    return inPage.length > 0;
   }
 
   // A row, bar or dialog moves as one box: up/down go box to box, left/right step through what is in it (the row itself first).
@@ -230,7 +240,8 @@
   function move(dir) {
     const all = focusables();
     if (!all.includes(focused)) { if (all.length) restore(); else scroll(dir); return; }
-    const from = boxOf(focused), across = dir === 'left' || dir === 'right';
+    const from = boxOf(focused), across = dir === 'left' || dir === 'right', onTab = focused.classList.contains('tab');
+    if (onTab && dir === 'down') { if (!enter()) scroll(dir); return; }   // down from the header goes into the page, not to whatever sits below the tab
     if (across) {                                   // DOM order inside the box, so wrapped buttons stay reachable
       const mates = all.filter(e => boxOf(e) === from), i = mates.indexOf(focused) + (dir === 'right' ? 1 : -1);
       if (i >= 0 && i < mates.length) { focus(mates[i]); return; }
@@ -239,7 +250,7 @@
     let best = null, score = Infinity;
     for (const e of all) {
       const box = boxOf(e);
-      if (box === from) continue;
+      if (box === from || (across && e.classList.contains('tab') !== onTab)) continue;   // left/right never cross between header and page
       const b = box.getBoundingClientRect();
       const gap = { right: b.left - a.right, left: a.left - b.right, down: b.top - a.bottom, up: a.top - b.bottom }[dir];
       if (gap < -8) continue;                       // not that way (a little slack)
@@ -342,7 +353,7 @@
       const root = $('tools'), had = focused && root.contains(focused) ? focused.dataset.key : null;
       root.textContent = '';
       root.append(...nodes);
-      if (tab === 'tools' && $('dialog').hidden && (key !== undefined || !focusables().includes(focused))) restore(key !== undefined ? key : had);
+      if (tab === 'tools' && $('dialog').hidden && (key !== undefined || !focusables().includes(focused) || (parked && focused === parked))) restore(key !== undefined ? key : had);
     } });
 
   // Desktop previews: the keyboard stands in for the remote. On the TV, Java takes these keys before the page sees them.
@@ -355,11 +366,7 @@
     readDevice();
     document.querySelectorAll('.tab').forEach(t => {
       t.dataset.key = 'tab:' + t.dataset.tab;
-      t.onclick = () => {                           // OK on a tab opens it and steps into its list (About has none: focus stays)
-        app.showTab(t.dataset.tab);
-        const k = keyFor[tab] || [], inPage = focusables().filter(e => $(tab).contains(e));
-        if (inPage.length) focus(inPage.find(e => e.dataset.key === k[0]) || inPage[0]);
-      };
+      t.onclick = () => { app.showTab(t.dataset.tab); enter(); };   // OK on a tab opens it and steps into its list (About has none: focus stays)
     });
     render();
     TV.loadCatalog();
