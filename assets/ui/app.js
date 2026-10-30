@@ -211,6 +211,7 @@
     const row = e.closest('.row'), page = e.closest('.page');
     if (row && row !== e) row.classList.add('within');
     if (!page) return;
+    keyFor[page.id] = [e.dataset.key, e.dataset.card];   // where each page's focus goes back to
     if (focusables().find(x => page.contains(x)) === e) page.scrollTop = 0;   // the first one: show what is above it too
     else (row || e).scrollIntoView({ block: 'nearest' });
   }
@@ -246,6 +247,7 @@
       const s = (off > 0 ? 1e5 : 0) + Math.max(gap, 0) + off;   // in line first, then nearest
       if (s < score || (s === score && dir === 'left')) { score = s; best = e; }   // up/down land on the row, left on its last button
     }
+    if (dir === 'up' && best && best.classList.contains('tab')) best = document.querySelector('.tab.on') || best;   // up into the header: the open tab
     if (best) focus(best); else scroll(dir);
   }
 
@@ -280,7 +282,6 @@
     showTab(name) {
       const page = $(name);
       if (!page || !page.classList.contains('page')) return;
-      if (focused && $(tab).contains(focused)) keyFor[tab] = [focused.dataset.key, focused.dataset.card];
       tab = name;
       document.querySelectorAll('.page').forEach(p => { p.hidden = p.id !== name; });
       document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === name));
@@ -354,7 +355,11 @@
     readDevice();
     document.querySelectorAll('.tab').forEach(t => {
       t.dataset.key = 'tab:' + t.dataset.tab;
-      t.onclick = () => app.showTab(t.dataset.tab);
+      t.onclick = () => {                           // OK on a tab opens it and steps into its list (About has none: focus stays)
+        app.showTab(t.dataset.tab);
+        const k = keyFor[tab] || [], inPage = focusables().filter(e => $(tab).contains(e));
+        if (inPage.length) focus(inPage.find(e => e.dataset.key === k[0]) || inPage[0]);
+      };
     });
     render();
     TV.loadCatalog();

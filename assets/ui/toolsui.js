@@ -44,11 +44,11 @@
     kit.draw({ home, memory, keep: keepScreen, tidy: tidyScreen, health: healthScreen, network: networkScreen }[view](), key);
   }
 
-  function heading(title, again, running) {
+  function heading(title, again, running, note) {
     const h = el('div', 'head');
     h.append(el('h2', null, title));
     if (again) { again.disabled = running; h.append(again); }
-    if (running) h.append(el('p', 'note', CHECKING));
+    if (running) h.append(el('p', 'note', note || CHECKING));
     return h;
   }
 
@@ -187,8 +187,8 @@
   }
 
   function networkScreen() {
-    const out = [heading('Network check', kit.button('Check again', 'again', null, runNetwork), net.running)], n = net.answer;
-    if (net.running) return out.concat(el('p', 'big', 'Takes up to a minute.'));   // nothing lands until it all has
+    const out = [heading('Network check', kit.button('Check again', 'again', null, runNetwork), net.running, 'Checking, up to a minute…')], n = net.answer;
+    if (net.running) return out;                     // nothing lands until it all has
     if (!n) return out;
     if (typeof n !== 'object' || n.ok === false) return out.concat(el('p', 'note', why(n)));
     if (n.error) return out.concat(el('p', 'note', 'The network check failed. Try again.'));   // the check broke, not the network

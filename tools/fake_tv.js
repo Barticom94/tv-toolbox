@@ -4,12 +4,21 @@
 // Query words: setup (can't install yet), fire (a Fire TV), offline (saved copy), nocopy (offline, nothing saved),
 // empty (an empty store), tools (Tools approved), hold (installs wait for app.onProgress/onInstalled from the console),
 // nofile / badfile (health.json missing / not JSON), wired (Ethernet in the network check), vpn (a VPN is on in the network
-// check), neterror (the network check breaks).
+// check), neterror (the network check breaks), theme=<name> (a design study from design/themes/).
 // Tools answers read tools/fixtures/ with fetch, so a Tools preview needs a server whose CSP allows connect-src 'self'
 // (the APK's CSP allows no connections, and the APK never loads this file).
 // Every bridge call is recorded in TV.log.
 (function () {
   if (window.TV) return;
+  // ?theme=<name>: a design study from design/themes/<name>/ (its style.css, and its theme.js when it has one) replaces the app's look.
+  const theme = (/[?&]theme=([\w-]+)/.exec(location.search) || [])[1];
+  if (theme) {
+    document.querySelector('link[rel=stylesheet]').href = `../../design/themes/${theme}/style.css`;
+    const t = document.createElement('script');
+    t.src = `../../design/themes/${theme}/theme.js`;
+    t.onerror = () => t.remove();
+    document.head.appendChild(t);
+  }
   const has = w => new RegExp('[?&]' + w + '(&|=|$)').test(location.search);
   const SIGNER = 'a'.repeat(64), OTHER = 'b'.repeat(64), SELF = 'local.adam.tvtoolbox';
   const icon = (bg, fg) => 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">'
