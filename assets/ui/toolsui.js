@@ -1,11 +1,9 @@
-// The Tools tab: the approval switch above four tiles, and a screen for each tool. tools.js decides what the TV's answers
+// The Tools tab: four tools and the approval switch as rows, and a screen for each tool. tools.js decides what the TV's answers
 // mean; this file draws them and runs the steps. app.js keeps the focus and the dialog and hands them over in init().
 // Strict CSP: no inline style or handlers. Shell output, package names and check names only go in through textContent.
 (function () {
   const FAIL = "Couldn't read the details.", CHECKING = 'Checking…', NO_ANSWER = Tools.NO_ANSWER;
-  const HELP = 'Without this, the TV asks "Allow USB debugging?" again after 7 days without opening TV Toolbox. '
-    + 'It applies to every computer approved on this TV, your PC included.';
-  const NOTE = 'Android keeps apps parked on purpose, so closed apps take longer to open next time.';
+  const NOTE = 'Closed apps take longer to open next time.';
   const TILES = [['health', 'Nuvio health check'], ['memory', 'Free up memory'], ['network', 'Network check'], ['tidy', 'Restart and tidy']];
   // Health rows land as each check finishes; they are shown in this order so they don't jump about between runs.
   const KIND = { 'nuvio-app': 0, service: 1, yours: 2 };
@@ -66,20 +64,29 @@
     return b;
   }
 
-  function toggle(key, on, parts, fn) {
-    const b = el('button', 'card switch' + (on ? ' on' : '')), text = el('div', 'text');
+  /** A row OK presses: a name, a quieter line under it, and a word at its end (On / Off for a switch). */
+  function line(key, name, sub, word, fn) {
+    const b = el('button', 'row tool f'), text = el('div', 'text');
     b.dataset.key = key;
+    text.append(el('p', 'name', name));
+    if (sub) text.append(el('p', 'blurb', sub));
+    b.append(text);
+    if (word) b.append(el('p', 'act', word));
+    b.onclick = fn;
+    return b;
+  }
+
+  function toggle(key, name, sub, on, fn) {
+    const b = line(key, name, sub, on ? 'On' : 'Off', fn);
+    b.classList.toggle('done', !on);
     b.setAttribute('role', 'switch');
     b.setAttribute('aria-checked', String(on));
-    text.append(...parts);
-    b.append(text, el('span', 'knob'));
-    b.onclick = fn;
     return b;
   }
 
   /** A one-line list row: the name (cut short with … when long), a quieter note, the amount; buttons go after it. */
   function row(name, amount, sub) {
-    const r = el('div', 'card row');
+    const r = el('div', 'row item');
     r.append(el('p', 'name', name));
     if (sub) r.append(el('p', 'sub', sub));
     r.append(el('p', 'size', amount));
@@ -88,28 +95,17 @@
 
   /** A box with a state mark. The mark's shape differs as well as its colour, so colour is never the only sign. */
   function mark(state, text) {
-    const box = el('div', 'card check ' + state), line = el('div', 'line');
-    line.append(el('span', 'mark'), el('h3', 'name', text));
-    box.append(line);
+    const box = el('div', 'check ' + state), top = el('div', 'line');
+    top.append(el('span', 'mark'), el('h3', 'name', text));
+    box.append(top);
     return box;
   }
 
   function home() {
-    const parts = [el('h3', 'name', 'Stop the debugging approval expiring'), el('p', 'blurb', HELP)];
-    if (expiry) parts.push(el('p', 'state', 'Approval never expires'));
-    else if (expiryNote) parts.push(el('p', 'state', expiryNote));
-    const sw = toggle('expiry', !!expiry, parts, stopExpiry);
-    sw.classList.add('expiry');
-    if (!expiry) sw.classList.add('f');              // nothing can turn expiry back on, so once set it is a line, not a stop
-    const grid = el('div', 'grid tiles');
-    TILES.forEach(t => {
-      const b = el('button', 'card f');
-      b.dataset.key = 'tile:' + t[0];
-      b.append(el('h3', 'name', t[1]));
-      b.onclick = () => open(t[0]);
-      grid.append(b);
-    });
-    return [sw, grid];
+    const sw = toggle('expiry', 'Never expire USB debugging', expiryNote || (expiry ? null : 'Otherwise the TV asks again after 7 days.'), !!expiry, stopExpiry);
+    if (expiry) sw.classList.remove('f');            // nothing can turn expiry back on, so once set it is a line, not a stop
+    sw.classList.add('apart');
+    return TILES.map(t => line('tile:' + t[0], t[1], null, null, () => open(t[0]))).concat(sw);
   }
 
   function memory() {
@@ -145,9 +141,7 @@
     if (!mem.apps) return out.concat(el('p', 'note', mem.appsFail));
     const grid = el('div', 'grid two');
     mem.apps.filter(p => p !== self()).sort().forEach(p => {
-      const t = toggle('keep:' + p, mem.keep.includes(p), [el('p', 'name', p)], () => setKeep(p));
-      t.classList.add('f');
-      grid.append(t);
+      grid.append(toggle('keep:' + p, p, null, mem.keep.includes(p), () => setKeep(p)));
     });
     return out.concat(grid);
   }
@@ -194,7 +188,7 @@
 
   function networkScreen() {
     const out = [heading('Network check', kit.button('Check again', 'again', null, runNetwork), net.running)], n = net.answer;
-    if (net.running) return out.concat(el('p', 'big', 'This can take up to a minute.'));   // nothing lands until it all has
+    if (net.running) return out.concat(el('p', 'big', 'Takes up to a minute.'));   // nothing lands until it all has
     if (!n) return out;
     if (typeof n !== 'object' || n.ok === false) return out.concat(el('p', 'note', why(n)));
     if (n.error) return out.concat(el('p', 'note', 'The network check failed. Try again.'));   // the check broke, not the network
@@ -218,7 +212,7 @@
       'Download speed: ' + (typeof n.speedMbps === 'number' ? Math.round(n.speedMbps) + ' Mb/s' : 'no answer'),
       'DNS servers: ' + (Array.isArray(n.dns) && n.dns.length ? n.dns.join(', ') : 'none found'),
       'Private DNS: ' + (dns.active ? 'on' + (dns.name ? ', ' + dns.name : '') : 'off'),
-    ].concat(n.vpn === true ? "The TV's DNS comes from the VPN while it is on." : []);
+    ].concat(n.vpn === true ? "DNS comes from the VPN while it's on." : []);
   }
 
   // ---- what each screen does ----

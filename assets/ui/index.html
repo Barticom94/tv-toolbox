@@ -8,15 +8,15 @@
 </head>
 <body>
 <header>
-  <h1>TV Toolbox</h1>
-  <nav id="tabs"><button class="tab on" data-tab="apps">Apps</button><button class="tab" data-tab="tools" hidden>Tools</button></nav>
+  <h1><img src="toolbox.svg" alt="">TV Toolbox</h1>
+  <nav id="tabs"><button class="tab f on" data-tab="apps">Apps</button><button class="tab f" data-tab="tools" hidden>Tools</button><button class="tab f" data-tab="about">About</button></nav>
 </header>
 <main>
   <section id="apps" class="page"></section>
   <section id="tools" class="page" hidden></section>
   <section id="about" class="page" hidden>
     <h2 id="about-name">TV Toolbox</h2>
-    <p id="about-tools" hidden>Tools need USB debugging approved on this TV.</p>
+    <p id="about-tools" class="note" hidden>Tools need USB debugging allowed.</p>
     <div id="licences">
       <h3>Atkinson Hyperlegible Next</h3>
       <pre>Copyright 2020-2024 The Atkinson Hyperlegible Next Project Authors (https://github.com/googlefonts/atkinson-hyperlegible-next)
@@ -146,7 +146,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.</pre>
 <div id="dialog" hidden>
   <div class="box">
     <p id="dialog-text"></p>
-    <div class="buttons"><button id="dialog-yes" class="btn f"></button><button id="dialog-no" class="btn f">Cancel</button></div>
+    <div class="buttons"><button id="dialog-yes" class="pill f"></button><button id="dialog-no" class="pill f"></button></div>
   </div>
 </div>
 <script src="store.js"></script>

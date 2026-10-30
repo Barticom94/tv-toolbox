@@ -1,4 +1,4 @@
-// The screens. store.js decides what each card shows; this file draws it, moves the focus and talks to Java (window.TV).
+// The screens. store.js decides what each row shows; this file draws it, moves the focus and talks to Java (window.TV).
 // Strict CSP: no inline style or handlers, and catalogue text only ever goes in through textContent.
 (function () {
   const $ = id => document.getElementById(id);
@@ -9,11 +9,13 @@
     return e;
   };
   const FAILED = 'Install failed', CANCELLED = 'Cancelled', MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  // The word at a row's end is amber when there is something to do, quiet when there isn't.
+  const TODO = ['Update', 'Try again'], DONE = ['Open', 'Installed', 'Turned off', 'Not for this TV'];
 
-  let device = {}, answer = null, list = null, toolsOn = false, tab = 'apps', focused = null, shown = false;
-  let swap = null;                                  // {id, resumed}: a Swap it waiting for the uninstall screen to close
+  let device = {}, answer = null, list = null, toolsOn = false, tab = 'apps', focused = null, shown = false, closeDialog = null;
+  let swap = null;                                  // {id, resumed}: a Swap waiting for the uninstall screen to close
   const queue = new Store.Queue(), progress = {}, notes = {}, keyFor = {};
-  let statusEls = {};
+  let parts = {};                                   // id → the row's live parts, repainted on progress without a redraw
 
   // "Keep it" is remembered per app id. Storage can be missing or full: then it lasts until the app closes.
   let keptIds = [];
@@ -56,28 +58,26 @@
     }
   }
 
-  function statusText(id) {
-    if (queue.running === id) return progress[id] >= 100 ? 'Installing…' : `Downloading ${progress[id] || 0}%`;
-    if (queue.waiting.includes(id)) return 'Waiting to install';
+  /** What a row's end says right now: an install in progress or its outcome, else the store's look. pct: the bar, null for none. */
+  function statusOf(id, look) {
+    if (queue.running === id) return progress[id] >= 100 ? { text: 'Installing', pct: 100 } : { text: (progress[id] || 0) + '%', pct: progress[id] || 0 };
+    if (queue.waiting.includes(id)) return { text: 'Waiting', pct: 0 };
     const m = notes[id];
-    return m == null ? '' : m === FAILED || m === CANCELLED ? m : FAILED + '\n' + m;   // Android's message verbatim, under a plain line
+    if (m === CANCELLED) return { text: look.text, detail: CANCELLED };
+    if (m != null) return { text: 'Try again', detail: m === FAILED ? FAILED : m };   // Android's message verbatim
+    return look;
   }
 
-  function statusEl(id) {
-    const s = el('p', 'status', statusText(id));
-    s.hidden = !s.textContent;
-    statusEls[id] = s;
-    return s;
-  }
-
-  /** A yes/cancel question; focus starts on Cancel and goes back where it was. */
-  function ask(text, yes, fn) {
+  /** A yes/no question; focus starts on No and goes back where it was. Back closes it without either. */
+  function ask(text, yes, fn, no, noFn) {
     const back = focused && [focused.dataset.key, focused.dataset.card];
-    const close = () => { $('dialog').hidden = true; restore(back && back[0], back && back[1]); };
+    const close = () => { $('dialog').hidden = true; closeDialog = null; restore(back && back[0], back && back[1]); };
     $('dialog-text').textContent = text;
     $('dialog-yes').textContent = yes;
+    $('dialog-no').textContent = no || 'Cancel';
     $('dialog-yes').onclick = () => { close(); fn(); };
-    $('dialog-no').onclick = close;
+    $('dialog-no').onclick = () => { close(); if (noFn) noFn(); };
+    closeDialog = close;
     $('dialog').hidden = false;
     focus($('dialog-no'));
   }
@@ -85,17 +85,16 @@
   function act(c, what) {
     if (what === 'install') install([c.id]);
     else if (what === 'open') TV.open(c.entry.package);
-    else if (what === 'keep') { keep(c.id); render(); }
-    else if (what === 'swap') ask("Swapping deletes this app's settings and sign-ins. Swap it?", 'Swap', () => {
+    else if (what === 'swap') ask(`${c.entry.name} came from another store. Swap it for this one? Its settings and sign-ins go.`, 'Swap', () => {
       swap = { id: c.id, resumed: false };
       TV.uninstall(c.entry.package);
-    });
+    }, 'Keep it', () => { keep(c.id); render(); });
   }
 
   // ---- drawing ----
 
   function button(text, key, card, fn) {
-    const b = el('button', 'btn f', text);
+    const b = el('button', 'pill f', text);
     b.dataset.key = key;
     if (card) b.dataset.card = card;
     b.onclick = fn;
@@ -112,81 +111,83 @@
     return img;
   }
 
-  function cardEl(id, entry, badge, buttons) {
-    const node = el('div', 'card'), top = el('div', 'top'), text = el('div');
-    node.dataset.card = id;
-    text.append(el('h3', 'name', entry.name));
-    if (entry.blurb) text.append(el('p', 'blurb', entry.blurb));
-    top.append(iconEl(entry), text);
-    node.append(top);
-    if (badge) node.append(el('p', 'badge', badge));
-    node.append(statusEl(id));
-    if (buttons.length) {
-      const row = el('div', 'buttons');
-      row.append(...buttons);
-      node.append(row);
-    } else {                                        // nothing to press: the card itself takes the focus
-      node.classList.add('f');
-      node.dataset.key = id;
-    }
-    return node;
+  /** One line per app: icon, name, blurb, and the word for what OK does. `extra` buttons sit after it, reached with Right. */
+  function appRow(id, entry, blurb, look, onOk, extra) {
+    const r = el('div', 'row app f'), end = el('div', 'end'), word = el('p', 'act'), sub = el('p', 'detail'), track = el('span', 'track'), fill = el('span', 'fill');
+    r.dataset.key = r.dataset.card = id;
+    r.onclick = onOk;
+    end.append(word, sub);
+    track.append(fill);
+    r.append(iconEl(entry), el('p', 'name', entry.name), el('p', 'blurb', blurb || ''), end, ...extra, track);
+    parts[id] = { r, word, sub, fill, look };
+    paint(id);
+    return r;
   }
 
-  function appCard(c) {
+  function paint(id) {
+    const p = parts[id];
+    if (!p) return;
+    const s = statusOf(id, p.look);
+    p.word.textContent = s.text;
+    p.sub.textContent = s.detail || '';
+    p.sub.hidden = !s.detail;
+    p.r.classList.toggle('todo', TODO.includes(s.text));
+    p.r.classList.toggle('done', DONE.includes(s.text));
+    p.r.classList.toggle('busy', s.pct != null);
+    if (s.pct != null) p.fill.style.transform = `scaleX(${s.pct / 100})`;   // CSSOM, which the CSP allows
+  }
+
+  function cardRow(c) {
     const kept = c.state === 'foreign' && keptIds.includes(c.id);
-    const buttons = (kept ? [] : c.buttons).map(b => button(b.text, c.id + ':' + b.act, c.id, () => act(c, b.act)));
-    if (c.old.length) buttons.push(button('Remove old version', c.id + ':old', c.id, () => c.old.forEach(p => TV.uninstall(p))));
-    return cardEl(c.id, c.entry, c.badge, buttons);
+    const look = kept ? (c.installed.launch ? { act: 'open', text: 'Open' } : { act: null, text: 'Installed' }) : c;
+    const extra = c.old.length ? [button('Remove old version', c.id + ':old', c.id, () => c.old.forEach(p => TV.uninstall(p)))] : [];
+    return appRow(c.id, c.entry, c.entry.blurb, look, () => act(c, look.act), extra);
   }
 
   function setupEl() {
-    const fire = !!device.fireTv, box = el('div', 'banner setup');
-    box.append(el('p', 'lead', 'Before the first install, allow TV Toolbox to install apps:'));
-    (fire ? ['Settings › My Fire TV › Developer Options › Install unknown apps › TV Toolbox › On',
-             'No Developer Options? Go to My Fire TV › About and press the device name 7 times.',
-             'TV Toolbox not in the list? Check for a Fire TV update first.']
-          : ['Settings › System › About › press "Android TV OS build" until it says you\'re a developer.',
-             'Then press Install on any app, choose Settings on the pop-up and set TV Toolbox to Allowed.',
-             'If Play Protect stops an install, choose Details › Install anyway.']).forEach(t => box.append(el('p', null, t)));
-    if (fire) box.append(button('Open Settings', 'settings', null, () => TV.openInstallSettings()));
+    const fire = !!device.fireTv, box = el('div', 'setup');
+    box.append(el('h2', null, 'Allow installs first'));
+    (fire ? ['Settings › My Fire TV › Developer options › Install unknown apps › TV Toolbox › On',
+             'No Developer options? In My Fire TV › About, press the device name 7 times.',
+             'TV Toolbox not listed? Update the Fire TV first.']
+          : ['Settings › System › About: press Android TV OS build 7 times.',
+             'Then press Install here, choose Settings and allow TV Toolbox.',
+             'Play Protect stops it? Details › Install anyway.']).forEach(t => box.append(el('p', null, t)));
+    if (fire) {
+      const bar = el('div', 'bar');
+      bar.append(button('Open Settings', 'settings', null, () => TV.openInstallSettings()));
+      box.append(bar);
+    }
     return box;
   }
 
   function render() {
     const root = $('apps'), had = focused && root.contains(focused) ? [focused.dataset.key, focused.dataset.card] : null;
-    const first = !!list && !shown;                 // the first list in: focus starts at the top, not on About
+    const first = !!list && !shown;                 // the first list in: focus starts at the top
     shown = shown || !!list;
     root.textContent = '';
-    statusEls = {};
+    parts = {};
     if (device.canInstall === false) root.append(setupEl());
     const cards = list ? list.cards : [];
-    if (list && list.selfUpdate) {
-      const b = el('div', 'banner'), t = el('div', 'text');
-      t.append(el('p', null, 'A new TV Toolbox is ready.'), statusEl(list.selfUpdate.id));
-      b.append(t, button('Install', 'self', null, () => install([list.selfUpdate.id])));
-      root.append(b);
-    }
-    if (list && list.offline && list.savedAt) root.append(el('div', 'banner', `Couldn't reach the store, showing the list from ${when(list.savedAt)}`));
     const ups = cards.filter(c => c.state === 'update' && !c.group);   // "Only on your TV" entries update one by one
-    if (ups.length >= 2) {
-      const bar = el('div', 'bar');
-      bar.append(button(`Update all (${ups.length})`, 'updateAll', null, () => install(ups.map(c => c.id))));
+    const offline = list && list.offline && list.savedAt;
+    if (offline || ups.length >= 2) {
+      const bar = el('div', 'bar top');
+      if (offline) bar.append(el('p', 'note', `Offline. List from ${when(list.savedAt)}.`));
+      if (ups.length >= 2) bar.append(button(`Update ${ups.length} apps`,'updateAll', null, () => install(ups.map(c => c.id))));
       root.append(bar);
     }
-    if (!list) root.append(el('p', 'note', 'Loading the store…'));
-    else if (!cards.length) root.append(el('p', 'note', list.offline && !list.savedAt
-      ? "Couldn't reach the store. Try again later." : 'The store is empty right now. Try again later.'));
+    if (!list) root.append(el('p', 'note', 'Loading…'));
+    else if (!cards.length) root.append(el('p', 'note', list.offline && !list.savedAt ? "Can't reach the store. Try again later." : 'Nothing in the store yet.'));
 
-    const grid = el('div', 'grid');
-    cards.filter(c => !c.group).forEach(c => grid.append(appCard(c)));
-    grid.append(cardEl('about', { name: 'TV Toolbox ' + (device.version || '') }, null,
-      [button('About', 'about', 'about', () => app.showTab('about'))]));
-    root.append(grid);
+    const s = list && list.selfUpdate;
+    if (s) root.append(appRow(s.id, s, 'New version', { act: 'install', text: 'Update', detail: device.version ? `${device.version} → ${s.versionName}` : null },
+      () => install([s.id]), []));
+    cards.filter(c => !c.group).forEach(c => root.append(cardRow(c)));
     const mine = cards.filter(c => c.group);
     if (mine.length) {
-      const g = el('div', 'grid');
-      mine.forEach(c => g.append(appCard(c)));
-      root.append(el('h2', 'group', mine[0].group), g);
+      root.append(el('h2', 'group', mine[0].group));
+      mine.forEach(c => root.append(cardRow(c)));
     }
 
     if (tab !== 'apps' || !$('dialog').hidden) return;
@@ -207,22 +208,22 @@
     focused = e || null;
     if (!e) return;
     e.classList.add('focus');
-    const card = e.closest('.card'), page = e.closest('.page');
-    if (card && card !== e) card.classList.add('within');
+    const row = e.closest('.row'), page = e.closest('.page');
+    if (row && row !== e) row.classList.add('within');
     if (!page) return;
-    if (focusables().find(x => page.contains(x)) === e) page.scrollTop = 0;   // the first one: show the banners above it too
-    else (card || e).scrollIntoView({ block: 'nearest' });
+    if (focusables().find(x => page.contains(x)) === e) page.scrollTop = 0;   // the first one: show what is above it too
+    else (row || e).scrollIntoView({ block: 'nearest' });
   }
 
-  /** Focus by key, else something on the same card, else the first thing on the page. */
+  /** Focus by key, else something on the same row, else the first thing on the page. */
   function restore(key, card) {
     const all = focusables();
     focus((key && all.find(e => e.dataset.key === key)) || (card && all.find(e => e.dataset.card === card))
       || all.find(e => !e.classList.contains('tab')) || all[0]);
   }
 
-  // A card, banner, bar or dialog moves as one box: up/down go card to card, left/right step through its buttons first.
-  const GROUP = '.card, .banner, .bar, #dialog .box';
+  // A row, bar or dialog moves as one box: up/down go box to box, left/right step through what is in it (the row itself first).
+  const GROUP = '.row, .bar, #dialog .box';
   const boxOf = e => e.closest(GROUP) || e;
 
   function move(dir) {
@@ -230,7 +231,7 @@
     if (!all.includes(focused)) { if (all.length) restore(); else scroll(dir); return; }
     const from = boxOf(focused), across = dir === 'left' || dir === 'right';
     if (across) {                                   // DOM order inside the box, so wrapped buttons stay reachable
-      const mates = all.filter(e => boxOf(e) === from && e !== from), i = mates.indexOf(focused) + (dir === 'right' ? 1 : -1);
+      const mates = all.filter(e => boxOf(e) === from), i = mates.indexOf(focused) + (dir === 'right' ? 1 : -1);
       if (i >= 0 && i < mates.length) { focus(mates[i]); return; }
     }
     const a = from.getBoundingClientRect();
@@ -240,10 +241,10 @@
       if (box === from) continue;
       const b = box.getBoundingClientRect();
       const gap = { right: b.left - a.right, left: a.left - b.right, down: b.top - a.bottom, up: a.top - b.bottom }[dir];
-      if (gap < -8) continue;                       // not that way (a little slack for the focus lift)
+      if (gap < -8) continue;                       // not that way (a little slack)
       const off = across ? Math.max(0, b.top - a.bottom, a.top - b.bottom) : Math.max(0, b.left - a.right, a.left - b.right);
       const s = (off > 0 ? 1e5 : 0) + Math.max(gap, 0) + off;   // in line first, then nearest
-      if (s < score || (s === score && dir === 'left')) { score = s; best = e; }   // left lands on a card's last button
+      if (s < score || (s === score && dir === 'left')) { score = s; best = e; }   // up/down land on the row, left on its last button
     }
     if (best) focus(best); else scroll(dir);
   }
@@ -260,7 +261,7 @@
     /** Remote keys. Returns true when Back was used here; otherwise Java closes the app. */
     key(cmd) {
       if (cmd === 'back') {
-        if (!$('dialog').hidden) { $('dialog-no').click(); return true; }
+        if (closeDialog) { closeDialog(); return true; }
         if (tab === 'tools' && ToolsUI.back()) return true;
         if (tab !== 'apps') {
           app.showTab('apps');
@@ -282,7 +283,7 @@
       if (focused && $(tab).contains(focused)) keyFor[tab] = [focused.dataset.key, focused.dataset.card];
       tab = name;
       document.querySelectorAll('.page').forEach(p => { p.hidden = p.id !== name; });
-      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === (name === 'about' ? 'apps' : name)));
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === name));
       if (name === 'about') {
         $('about-name').textContent = 'TV Toolbox ' + (device.version || '');
         $('about-tools').hidden = toolsOn || !device.healthFile;   // only a TV with health.json ever asks for ADB
@@ -311,8 +312,7 @@
 
     onProgress(id, pct) {
       progress[id] = pct;
-      const s = statusEls[id];
-      if (s) { s.textContent = statusText(id); s.hidden = false; }
+      paint(id);
     },
 
     onInstalled(id, ok, message) {
@@ -321,15 +321,12 @@
       if (!ok) notes[id] = message || FAILED;
       pump();
       render();
-      TV.loadCatalog();                             // the card's state changed
+      TV.loadCatalog();                             // the row's state changed
     },
 
     onTools(on) {
       toolsOn = !!on;
-      document.querySelectorAll('.tab').forEach(t => {
-        t.classList.toggle('f', toolsOn);          // a lone Apps tab is a label, not a stop
-        if (t.dataset.tab === 'tools') t.hidden = !toolsOn;
-      });
+      document.querySelectorAll('.tab').forEach(t => { if (t.dataset.tab === 'tools') t.hidden = !toolsOn; });
       if (!toolsOn && tab === 'tools') app.showTab('apps');
       if (answer) { list = Store.buildList(answer, device, toolsOn); render(); }
     },

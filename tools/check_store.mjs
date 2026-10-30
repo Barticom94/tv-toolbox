@@ -35,21 +35,21 @@ const split = { ...e, files: [{ abi: 'armeabi-v7a', url: 'u1', versionCode: 1062
                               { abi: 'universal', url: 'u2', versionCode: 1063, versionName: '1.0.1' }] };
 eq('split: 64-bit-only TV with 1062 sees update', cardState(split, inst(), only64), 'update');
 eq('split: armeabi-v7a TV with 1062 sees open', cardState(split, inst(), dev), 'open');
-eq('split: update badge names the picked file', label(split, 'update', inst({ name: '1.0.0' }), only64).badge, 'Update: 1.0.0 → 1.0.1');
+eq('split: update detail names the picked file', label(split, 'update', inst({ name: '1.0.0' }), only64).detail, '1.0.0 → 1.0.1');
 eq('split: file without a version uses the entry', cardState({ ...split, files: [{ abi: 'armeabi-v7a', url: 'u1' }] }, inst({ code: 1061 }), dev), 'update');
 
-// what each state shows
-eq('install label', label(e, 'install', undefined, dev), { badge: null, buttons: [{ act: 'install', text: 'Install' }] });
-eq('update label', label(e, 'update', inst({ code: 1061, name: '0.9.9' }), dev), { badge: 'Update: 0.9.9 → 1.0.0', buttons: [{ act: 'install', text: 'Update' }] });
-eq('open label', label(e, 'open', inst(), dev), { badge: null, buttons: [{ act: 'open', text: 'Open' }] });
-eq('newer label', label(e, 'newer', inst({ code: 1071 }), dev), { badge: 'Newer than the store', buttons: [{ act: 'open', text: 'Open' }] });
-eq('no launch activity', label(e, 'open', inst({ launch: false }), dev), { badge: 'Installed', buttons: [] });
-eq('no launch activity, newer', label(e, 'newer', inst({ launch: false, code: 1071 }), dev), { badge: 'Installed', buttons: [] });
-eq('foreign label', label(e, 'foreign', inst({ signer: 'bb' }), dev),
-   { badge: 'Installed from another store', buttons: [{ act: 'keep', text: 'Keep it' }, { act: 'swap', text: 'Swap it' }] });
-eq('unsupported label', label(e, 'unsupported', undefined, dev), { badge: "Doesn't work on this TV", buttons: [] });
-eq('off text', label(e, 'off', inst({ enabled: false }), dev), { badge: 'Turned off', buttons: [] });
-eq('fire tv off text', label(e, 'off', inst({ enabled: false }), { ...dev, fireTv: true }).badge, 'Turned off. Amazon may have blocked it.');
+// what each row says and does
+const row = (act, text, detail = null) => ({ act, text, detail });
+eq('install label', label(e, 'install', undefined, dev), row('install', 'Install'));
+eq('update label', label(e, 'update', inst({ code: 1061, name: '0.9.9' }), dev), row('install', 'Update', '0.9.9 → 1.0.0'));
+eq('open label', label(e, 'open', inst(), dev), row('open', 'Open'));
+eq('newer label', label(e, 'newer', inst({ code: 1071 }), dev), row('open', 'Open'));
+eq('no launch activity', label(e, 'open', inst({ launch: false }), dev), row(null, 'Installed'));
+eq('no launch activity, newer', label(e, 'newer', inst({ launch: false, code: 1071 }), dev), row(null, 'Installed'));
+eq('foreign label', label(e, 'foreign', inst({ signer: 'bb' }), dev), row('swap', 'Swap', 'From another store'));
+eq('unsupported label', label(e, 'unsupported', undefined, dev), row(null, 'Not for this TV'));
+eq('off text', label(e, 'off', inst({ enabled: false }), dev), row(null, 'Turned off'));
+eq('fire tv off text', label(e, 'off', inst({ enabled: false }), { ...dev, fireTv: true }).detail, 'Amazon may have blocked it');
 
 // old versions under another package name
 const re = { ...e, replaces: ['com.old.nuvio', 'com.older.nuvio'] };
@@ -77,7 +77,7 @@ eq('null catalogue', buildList({ catalog: null, installed: {} }, dev, false).car
 eq('empty answer', buildList({}, dev, true), { cards: [], selfUpdate: null, offline: false, savedAt: null });
 eq('offline and saved copy date pass through', (({ offline, savedAt }) => ({ offline, savedAt }))(buildList({ catalog: cat, installed: {}, offline: true, savedAt: 1761760000000 }, dev, false)), { offline: true, savedAt: 1761760000000 });
 const card = buildList({ catalog: { apps: [re] }, installed: { 'com.nuvio.tv': inst({ code: 1061, name: '0.9.9' }), 'com.old.nuvio': inst() } }, dev, false).cards[0];
-eq('card carries its decisions', [card.id, card.state, card.badge, card.buttons, card.old], ['nuvio', 'update', 'Update: 0.9.9 → 1.0.0', [{ act: 'install', text: 'Update' }], ['com.old.nuvio']]);
+eq('card carries its decisions', [card.id, card.state, card.act, card.text, card.detail, card.old], ['nuvio', 'update', 'install', 'Update', '0.9.9 → 1.0.0', ['com.old.nuvio']]);
 
 // queue runs one at a time
 const q = new Queue(); eq('add', q.add('a'), true); eq('dup', q.add('a'), false); q.add('b');

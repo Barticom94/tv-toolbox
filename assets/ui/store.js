@@ -29,22 +29,16 @@
     return installed.code < want ? 'update' : installed.code === want ? 'open' : 'newer';
   }
 
-  /** Badge and buttons for a card. Copy is the Task 7 table. */
+  /** What a row says and does: OK runs `act` (null: nothing to do), `text` is the word at its end, `detail` the small line under it. */
   function label(entry, state, installed, device) {
-    const open = { act: 'open', text: 'Open' };
+    const row = (act, text, detail) => ({ act, text, detail: detail || null });
     switch (state) {
-      case 'install': return { badge: null, buttons: [{ act: 'install', text: 'Install' }] };
-      case 'update': {
-        const file = fileFor(entry, device) || {};
-        return { badge: `Update: ${installed.name} → ${fileName(entry, file)}`, buttons: [{ act: 'install', text: 'Update' }] };
-      }
-      case 'open': case 'newer':
-        // An app with no launcher activity gets no Open button, rather than a button that does nothing.
-        if (!installed.launch) return { badge: 'Installed', buttons: [] };
-        return { badge: state === 'newer' ? 'Newer than the store' : null, buttons: [open] };
-      case 'foreign': return { badge: 'Installed from another store', buttons: [{ act: 'keep', text: 'Keep it' }, { act: 'swap', text: 'Swap it' }] };
-      case 'off': return { badge: device.fireTv ? 'Turned off. Amazon may have blocked it.' : 'Turned off', buttons: [] };
-      default: return { badge: "Doesn't work on this TV", buttons: [] };
+      case 'install': return row('install', 'Install');
+      case 'update': return row('install', 'Update', `${installed.name} → ${fileName(entry, fileFor(entry, device) || {})}`);
+      case 'open': case 'newer': return installed.launch ? row('open', 'Open') : row(null, 'Installed');   // no launcher activity: nothing to open
+      case 'foreign': return row('swap', 'Swap', 'From another store');
+      case 'off': return row(null, 'Turned off', device.fireTv ? 'Amazon may have blocked it' : null);
+      default: return row(null, 'Not for this TV');
     }
   }
 

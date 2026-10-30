@@ -1,6 +1,6 @@
 // A stand-in for the Java bridge, for desktop previews: assets/ui/index.html?fake loads it when window.TV is missing.
 // Not in the APK (build.sh packs assets/ only), so the TV never loads it. Sample apps are the public ones from apps.json
-// plus two made-up examples, together covering every card state.
+// plus two made-up examples, together covering every row state.
 // Query words: setup (can't install yet), fire (a Fire TV), offline (saved copy), nocopy (offline, nothing saved),
 // empty (an empty store), tools (Tools approved), hold (installs wait for app.onProgress/onInstalled from the console),
 // nofile / badfile (health.json missing / not JSON), wired (Ethernet in the network check), vpn (a VPN is on in the network
@@ -17,30 +17,31 @@
   const entry = (id, name, blurb, pkg, versionName, versionCode, more) => Object.assign({ id, name, blurb, package: pkg, versionName,
     versionCode, minSdk: 24, signer: SIGNER, files: [{ abi: 'universal', url: `https://example.invalid/${id}.apk`, size: 1 << 20,
     sha256: 'c'.repeat(64), versionCode, versionName }] }, more);
+  const ICON = id => `https://barticom94.github.io/tv-toolbox/icons/${id}.png`;
   const apps = [
-    entry('nuvio', 'Nuvio', 'Films, series and live TV.', 'com.nuvio.tv', '1.0.0', 1062, { icon: icon('#3B2A6B', '#B9A6FF') }),
-    entry('smarttube', 'SmartTube', 'YouTube without the ads.', 'org.smarttube.stable', '30.12', 2147,
-      { icon: icon('#5A1A1A', '#FF6B6B'), replaces: ['com.teamsmart.videomanager.tv', 'com.liskovsoft.smarttubetv.beta'] }),
-    entry('vlc', 'VLC', 'Plays video and music from a USB stick or another device.', 'org.videolan.vlc', '3.6.4', 13060104,
-      { icon: icon('#4A2A0A', '#FF8800') }),
-    entry('localsend', 'LocalSend', 'Send photos and videos from your phone to the TV.', 'org.localsend.localsend_app', '1.17.0', 82),
-    entry('aerial-views', 'Aerial Views', 'A screensaver of slow aerial films.', 'com.neilturner.aerialviews', '1.8.2', 39),
-    entry('projectivy', 'Projectivy', 'A simpler home screen with just your apps.', 'com.spocky.projengmenu', '4.62', 462),
+    entry('nuvio', 'Nuvio', 'Films, series and live TV.', 'com.nuvio.tv', '1.0.0', 1062, { icon: ICON('nuvio') }),
+    entry('smarttube', 'SmartTube', 'YouTube without the ads.', 'org.smarttube.stable', '32.68', 2168,
+      { icon: ICON('smarttube'), replaces: ['com.teamsmart.videomanager.tv', 'com.liskovsoft.smarttubetv.beta'] }),
+    entry('snug', 'Snug', 'Live sport and sports channels.', 'local.adam.streamedtv', '1.0.40', 40, { icon: ICON('snug') }),
+    entry('telly', 'Telly', 'Live UK TV with a Sky-style guide.', 'local.adam.telly', '1.0.2', 2, { icon: ICON('telly') }),
+    entry('songsterr-tv', 'Songsterr TV', 'Guitar tabs that scroll along with the song.', 'local.adam.tabremote', '0.1.35', 35,
+      { icon: ICON('songsterr-tv') }),
+    entry('projectivy', 'Projectivy', 'A simpler home screen with just your apps.', 'com.spocky.projengmenu', '4.72', 472, { icon: ICON('projectivy') }),
     entry('example-off', 'Example Radio', 'A made-up app that is turned off.', 'com.example.radio', '2.0', 20),
     entry('example-new', 'Example Games', 'A made-up app that needs a newer TV.', 'com.example.games', '5.1', 51, { minSdk: 35 }),
-    entry('nuvio-beta', 'Nuvio (beta)', "Nuvio's newest test build.", 'com.nuvio.tv', '1.1.0-beta.9', 1080, { hidden: true }),
-    entry('toolbox', 'TV Toolbox', 'The toolbox itself.', SELF, '1.0.13', 13, { hidden: true }),
+    entry('nuvio-beta', 'Nuvio (beta)', "Nuvio's newest test build.", 'com.nuvio.tv', '1.1.0-beta.9', 1080, { hidden: true, icon: ICON('nuvio-beta') }),
+    entry('toolbox', 'TV Toolbox', 'The toolbox itself.', SELF, '1.0.20', 20, { hidden: true, icon: ICON('toolbox') }),
   ];
   const inst = (name, code, more) => Object.assign({ code, name, enabled: true, signer: SIGNER, launch: true }, more);
   const installed = {
     'com.nuvio.tv': inst('1.1.0-beta.8', 1071),                         // newer than stable, an update for the beta
-    'org.smarttube.stable': inst('29.47', 2101),                        // update
+    'org.smarttube.stable': inst('32.47', 2147),                        // update
     'com.teamsmart.videomanager.tv': inst('6.0', 600),                  // SmartTube's old package
-    'org.localsend.localsend_app': inst('1.17.0', 82, { signer: OTHER }),   // from another store
-    'com.neilturner.aerialviews': inst('1.8.2', 39, { launch: false }), // a screensaver: nothing to open
-    'com.spocky.projengmenu': inst('4.62', 462),                        // open
+    'local.adam.telly': inst('1.0.2', 2, { signer: OTHER }),            // from another store
+    'local.adam.tabremote': inst('0.1.34', 34),                         // update
+    'com.spocky.projengmenu': inst('4.72', 472, { launch: false }),     // nothing to open (stands in for a screensaver)
     'com.example.radio': inst('2.0', 20, { enabled: false }),           // turned off
-    [SELF]: inst('1.0.12', 12),                                         // the toolbox: one behind
+    [SELF]: inst('1.0.19', 19),                                         // the toolbox: one behind
   };
   const savedAt = new Date(2026, 9, 29, 18, 20).getTime();
   const answer = () => JSON.parse(JSON.stringify({
@@ -93,7 +94,7 @@
   window.TV = {
     log,
     device: () => JSON.stringify({ sdk: 34, abis: ['armeabi-v7a', 'armeabi'], fireTv: has('fire'), canInstall: !has('setup'), healthFile: !has('nofile'),
-                                   self: SELF, version: '1.0.12' }),
+                                   self: SELF, version: '1.0.19' }),
     loadCatalog() { log.push('loadCatalog'); later(() => app.onCatalog(answer())); },
     install(id, abi) {
       log.push(`install ${id} ${abi}`);
