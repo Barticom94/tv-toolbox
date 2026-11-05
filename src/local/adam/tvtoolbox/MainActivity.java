@@ -1,10 +1,12 @@
 package local.adam.tvtoolbox;
 
+import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
@@ -17,6 +19,7 @@ import android.os.StatFs;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.KeyEvent;
+import android.view.accessibility.AccessibilityManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
 import android.webkit.RenderProcessGoneDetail;
@@ -45,7 +48,7 @@ import static local.adam.tvtoolbox.AdbCommands.Cmd.*;
  *  bridge is only ever reachable from our own files). Java does every network call, install and shell command; the page
  *  only draws. Keys go to the page as app.key(cmd); answers come back through js(). */
 public class MainActivity extends Activity {
-    static final String HOST = "toolbox.invalid", TAG = "TVToolbox";
+    static final String HOST = "toolbox.invalid", TAG = "TVToolbox", PROJECTIVY = "com.spocky.projengmenu";
     /** The page only draws: its own files, fonts, card icons from the store's Pages host, nothing else, no network of its own. */
     static final String CSP = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; "
             + "img-src 'self' https://barticom94.github.io data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
@@ -263,16 +266,42 @@ public class MainActivity extends Activity {
     SharedPreferences toolPrefs() { return getSharedPreferences("tools", MODE_PRIVATE); }
 
     class Bridge {
-        /** What this TV is: the page decides which cards and tools make sense from it. */
+        /** What this TV is: the page decides which cards, tools and set-up steps make sense from it. Each set-up fact is read on
+         *  its own, so one that fails is left out (the page treats a missing fact as unknown) instead of emptying the answer. */
         @JavascriptInterface public String device() {
             try {
                 PackageManager pm = getPackageManager();
-                return new JSONObject().put("sdk", Build.VERSION.SDK_INT).put("abis", new JSONArray(Build.SUPPORTED_ABIS))
+                JSONObject o = new JSONObject().put("sdk", Build.VERSION.SDK_INT).put("abis", new JSONArray(Build.SUPPORTED_ABIS))
                         .put("fireTv", pm.hasSystemFeature("amazon.hardware.fire_tv"))
                         .put("canInstall", pm.canRequestPackageInstalls())
                         .put("healthFile", health.file() != null)
                         .put("self", getPackageName())
-                        .put("version", pm.getPackageInfo(getPackageName(), 0).versionName).toString();
+                        .put("version", pm.getPackageInfo(getPackageName(), 0).versionName);
+                try {   // packages with an accessibility service switched on (an enabled one can block the Home button)
+                    Set<String> pkgs = new TreeSet<>();
+                    for (AccessibilityServiceInfo s : ((AccessibilityManager) getSystemService(ACCESSIBILITY_SERVICE))
+                            .getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK))
+                        pkgs.add(s.getResolveInfo().serviceInfo.packageName);
+                    o.put("a11yApps", new JSONArray(pkgs));
+                } catch (Exception e) { /* left out */ }
+                try {
+                    android.content.ContentResolver cr = getContentResolver();
+                    o.put("animations", new JSONArray().put((double) Settings.Global.getFloat(cr, Settings.Global.WINDOW_ANIMATION_SCALE, 1f))
+                            .put((double) Settings.Global.getFloat(cr, Settings.Global.TRANSITION_ANIMATION_SCALE, 1f))
+                            .put((double) Settings.Global.getFloat(cr, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)));
+                } catch (Exception e) { /* left out */ }
+                try { o.put("devOptions", Settings.Global.getInt(getContentResolver(), Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) != 0); }
+                catch (Exception e) { /* left out */ }
+                try {   // Android 13+ blocks Home-button access for apps installed from a file
+                    boolean blocked = false;
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        int src = pm.getInstallSourceInfo(PROJECTIVY).getPackageSource();
+                        blocked = src == PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE || src == PackageInstaller.PACKAGE_SOURCE_DOWNLOADED_FILE;
+                    }
+                    o.put("homeBlocked", blocked);
+                } catch (PackageManager.NameNotFoundException e) { o.put("homeBlocked", false); }
+                catch (Exception e) { /* left out */ }
+                return o.toString();
             } catch (Exception e) { return "{}"; }
         }
 
@@ -308,6 +337,18 @@ public class MainActivity extends Activity {
                 startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
                 return true;
             } catch (ActivityNotFoundException e) { return false; }
+        }
+
+        /** Projectivy's own settings screen; false when it isn't installed or won't open. */
+        @JavascriptInterface public boolean openProjectivySettings() {
+            try { startActivity(new Intent("tv.projectivy.SETTINGS").setPackage(PROJECTIVY)); return true; }
+            catch (ActivityNotFoundException | SecurityException e) { return false; }
+        }
+
+        /** The system Developer options screen; false when this TV has none (or it's hidden). */
+        @JavascriptInterface public boolean openDeveloperOptions() {
+            try { startActivity(new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)); return true; }
+            catch (ActivityNotFoundException | SecurityException e) { return false; }
         }
 
         /** Answers with app.onTools(ok), unless this TV doesn't try (see connectTools above). */

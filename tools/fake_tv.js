@@ -1,8 +1,11 @@
 // A stand-in for the Java bridge, for desktop previews: assets/ui/index.html?fake loads it when window.TV is missing.
 // Not in the APK (build.sh packs assets/ only), so the TV never loads it. Sample apps are the public ones from apps.json
 // plus two made-up examples, together covering every row state.
-// Query words: setup (can't install yet), fire (a Fire TV), offline (saved copy), nocopy (offline, nothing saved),
-// empty (an empty store), tools (Tools approved), hold (installs wait for app.onProgress/onInstalled from the console),
+// Query words: setup (can't install yet, as ever; not the setup flag on four sample entries, which marks the apps on
+// the Set up this TV page), fresh (Nuvio, Telly and Projectivy not installed, as on a new TV), homeoff (no accessibility app
+// is on), slowanim (animations at 1x/1.5x/1x, not the fast 0.5x), devoff (Developer options off), filecopy (Projectivy came
+// from a file, so Android blocks its Home access), fire (a Fire TV), offline (saved copy), nocopy (offline, nothing saved),
+// empty (an empty store), tools (Tools approved), hold (installs wait for app.onProgress/onInstalled from the console, or TV.finish(id) which records the install and answers it),
 // nofile / badfile (health.json missing / not JSON), wired (Ethernet in the network check), vpn (a VPN is on in the network
 // check), neterror (the network check breaks), theme=<name> (a design study from design/themes/).
 // Tools answers read tools/fixtures/ with fetch, so a Tools preview needs a server whose CSP allows connect-src 'self'
@@ -28,14 +31,14 @@
     sha256: 'c'.repeat(64), versionCode, versionName }] }, more);
   const ICON = id => `https://barticom94.github.io/tv-toolbox/icons/${id}.png`;
   const apps = [
-    entry('nuvio', 'Nuvio', 'Films, series and live TV.', 'com.nuvio.tv', '1.0.0', 1062, { icon: ICON('nuvio') }),
+    entry('nuvio', 'Nuvio', 'Films, series and live TV.', 'com.nuvio.tv', '1.0.0', 1062, { icon: ICON('nuvio'), setup: true }),
     entry('smarttube', 'SmartTube', 'YouTube without the ads.', 'org.smarttube.stable', '32.68', 2168,
       { icon: ICON('smarttube'), replaces: ['com.teamsmart.videomanager.tv', 'com.liskovsoft.smarttubetv.beta'] }),
-    entry('snug', 'Snug', 'Live sport and sports channels.', 'local.adam.streamedtv', '1.0.40', 40, { icon: ICON('snug') }),
-    entry('telly', 'Telly', 'Live UK TV with a Sky-style guide.', 'local.adam.telly', '1.0.2', 2, { icon: ICON('telly') }),
+    entry('snug', 'Snug', 'Live sport and sports channels.', 'local.adam.streamedtv', '1.0.40', 40, { icon: ICON('snug'), setup: true }),
+    entry('telly', 'Telly', 'Live UK TV with a Sky-style guide.', 'local.adam.telly', '1.0.2', 2, { icon: ICON('telly'), setup: true }),
     entry('songsterr-tv', 'Songsterr TV', 'Guitar tabs that scroll along with the song.', 'local.adam.tabremote', '0.1.35', 35,
       { icon: ICON('songsterr-tv') }),
-    entry('projectivy', 'Projectivy', 'A simpler home screen with just your apps.', 'com.spocky.projengmenu', '4.72', 472, { icon: ICON('projectivy') }),
+    entry('projectivy', 'Projectivy', 'A simpler home screen with just your apps.', 'com.spocky.projengmenu', '4.72', 472, { icon: ICON('projectivy'), setup: true }),
     entry('example-off', 'Example Radio', 'A made-up app that is turned off.', 'com.example.radio', '2.0', 20),
     entry('example-new', 'Example Games', 'A made-up app that needs a newer TV.', 'com.example.games', '5.1', 51, { minSdk: 35 }),
     entry('nuvio-beta', 'Nuvio (beta)', "Nuvio's newest test build.", 'com.nuvio.tv', '1.1.0-beta.9', 1080, { hidden: true, icon: ICON('nuvio-beta') }),
@@ -52,6 +55,8 @@
     'com.example.radio': inst('2.0', 20, { enabled: false }),           // turned off
     [SELF]: inst('1.0.19', 19),                                         // the toolbox: one behind
   };
+  if (has('fresh')) ['com.nuvio.tv', 'local.adam.telly', 'com.spocky.projengmenu'].forEach(p => delete installed[p]);
+  const PROJ = 'com.spocky.projengmenu', facts = { homeoff: has('homeoff'), slowanim: has('slowanim'), devoff: has('devoff') };
   const savedAt = new Date(2026, 9, 29, 18, 20).getTime();
   const answer = () => JSON.parse(JSON.stringify({
     catalog: has('nocopy') ? null : { generated: '2026-10-29T18:20:00Z', apps: has('empty') ? [] : apps },
@@ -103,7 +108,8 @@
   window.TV = {
     log,
     device: () => JSON.stringify({ sdk: 34, abis: ['armeabi-v7a', 'armeabi'], fireTv: has('fire'), canInstall: !has('setup'), healthFile: !has('nofile'),
-                                   self: SELF, version: '1.0.19' }),
+                                   self: SELF, version: '1.0.19', a11yApps: facts.homeoff ? [] : [PROJ],
+                                   animations: facts.slowanim ? [1, 1.5, 1] : [0.5, 0.5, 0.5], devOptions: !facts.devoff, homeBlocked: has('filecopy') }),
     loadCatalog() { log.push('loadCatalog'); later(() => app.onCatalog(answer())); },
     install(id, abi) {
       log.push(`install ${id} ${abi}`);
@@ -118,9 +124,25 @@
       };
       later(tick);
     },
+    finish(id) {   // &hold: records the install the way the timed path does, then answers it
+      log.push('finish ' + id);
+      const e = apps.find(a => a.id === id);
+      installed[e.package] = inst(e.versionName, e.versionCode);
+      app.onInstalled(id, true, '');
+    },
     uninstall(pkg) { log.push('uninstall ' + pkg); delete installed[pkg]; later(() => app.onResume(), 200); },
     open(pkg) { log.push('open ' + pkg); },
     openInstallSettings() { log.push('openInstallSettings'); return true; },
+    openProjectivySettings() {
+      log.push('openProjectivySettings');
+      later(() => { facts.homeoff = true; app.onResume(); }, 300);   // the user switched the accessibility app off there
+      return true;
+    },
+    openDeveloperOptions() {
+      log.push('openDeveloperOptions');
+      later(() => { facts.slowanim = false; app.onResume(); }, 300);   // the user set the animation scales to 0.5x there
+      return true;
+    },
     nudge() { log.push('nudge'); },
 
     tool(name, arg) {
