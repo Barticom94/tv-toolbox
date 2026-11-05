@@ -168,7 +168,7 @@
     /** render() rebuilds every row, so rows are matched by data-key: busy then Open (or Installed) is an install that landed. */
     function landings() {
       const now = Date.now();
-      document.querySelectorAll('#apps .row.app').forEach(r => {
+      document.querySelectorAll('.page .row.app').forEach(r => {
         const k = r.dataset.key, word = r.querySelector('.act'), t = word ? word.textContent : '';
         if (r.classList.contains('busy')) busySince[k] = now;
         else if (busySince[k] && (t === 'Open' || t === 'Installed')) {

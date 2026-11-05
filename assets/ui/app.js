@@ -10,13 +10,13 @@
   };
   const FAILED = 'Install failed', CANCELLED = 'Cancelled', MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   // The word at a row's end is amber when there is something to do, quiet when there isn't.
-  const TODO = ['Update', 'Try again'], DONE = ['Open', 'Installed', 'Turned off', 'Not for this TV'];
+  const TODO = ['Update', 'Try again', 'Start', 'Open settings', 'Reinstall'], DONE = ['Open', 'Installed', 'Turned off', 'Not for this TV', 'Done'];
 
   let device = {}, answer = null, list = null, toolsOn = false, tab = 'apps', focused = null, shown = false, closeDialog = null;
   let parked = null;                                // the open tab, held there because its page had nothing to focus yet
   let swap = null;                                  // {id, resumed}: a Swap waiting for the uninstall screen to close
   const queue = new Store.Queue(), progress = {}, notes = {}, keyFor = {};
-  let parts = {};                                   // id → the row's live parts, repainted on progress without a redraw
+  let parts = {};                                   // id → the live parts of every row drawn for it, repainted on progress without a redraw
 
   // "Keep it" is remembered per app id. Storage can be missing or full: then it lasts until the app closes.
   let keptIds = [];
@@ -25,6 +25,9 @@
     if (!keptIds.includes(id)) keptIds.push(id);
     try { localStorage.setItem('keep', JSON.stringify(keptIds)); } catch (e) { /* kept for this run only */ }
   }
+  // Once every setup step is done the Apps row stops appearing, so a relative who later removes an app isn't nagged.
+  let setupDone = false;
+  try { setupDone = localStorage.getItem('setupDone') === '1'; } catch (e) { /* not saved */ }
 
   function readDevice() {
     try { device = JSON.parse(TV.device()) || {}; } catch (e) { device = {}; }
@@ -112,47 +115,49 @@
     return img;
   }
 
-  /** One line per app: icon, name, blurb, and the word for what OK does. `extra` buttons sit after it, reached with Right. */
-  function appRow(id, entry, blurb, look, onOk, extra) {
+  /** One line per app: icon, name, blurb, and the word for what OK does. `key` names the row (focus, the room), `id` is the
+   *  queue id whose installs it shows. `extra` buttons sit after it, reached with Right. */
+  function appRow(key, id, entry, blurb, look, onOk, extra = []) {
     const r = el('div', 'row app f'), end = el('div', 'end'), word = el('p', 'act'), sub = el('p', 'detail'), track = el('span', 'track'), fill = el('span', 'fill');
-    r.dataset.key = r.dataset.card = id;
+    r.dataset.key = r.dataset.card = key;
     r.onclick = onOk;
     end.append(word, sub);
     track.append(fill);
     r.append(iconEl(entry), el('p', 'name', entry.name), el('p', 'blurb', blurb || ''), end, ...extra, track);
-    parts[id] = { r, word, sub, fill, look };
+    (parts[id] = parts[id] || []).push({ r, word, sub, fill, look });
     paint(id);
     return r;
   }
 
   function paint(id) {
-    const p = parts[id];
-    if (!p) return;
-    const s = statusOf(id, p.look);
-    p.word.textContent = s.text;
-    p.sub.textContent = s.detail || '';
-    p.sub.hidden = !s.detail;
-    p.r.classList.toggle('todo', TODO.includes(s.text));
-    p.r.classList.toggle('done', DONE.includes(s.text));
-    p.r.classList.toggle('busy', s.pct != null);
-    if (s.pct != null) p.fill.style.transform = `scaleX(${s.pct / 100})`;   // CSSOM, which the CSP allows
+    (parts[id] || []).forEach(p => {
+      const s = statusOf(id, p.look);
+      p.word.textContent = s.text;
+      p.sub.textContent = s.detail || '';
+      p.sub.hidden = !s.detail;
+      p.r.classList.toggle('todo', TODO.includes(s.text));
+      p.r.classList.toggle('done', DONE.includes(s.text));
+      p.r.classList.toggle('busy', s.pct != null);
+      if (s.pct != null) p.fill.style.transform = `scaleX(${s.pct / 100})`;   // CSSOM, which the CSP allows
+    });
   }
 
   function cardRow(c) {
     const kept = c.state === 'foreign' && keptIds.includes(c.id);
     const look = kept ? (c.installed.launch ? { act: 'open', text: 'Open' } : { act: null, text: 'Installed' }) : c;
     const extra = c.old.length ? [button('Remove old version', c.id + ':old', c.id, () => c.old.forEach(p => TV.uninstall(p)))] : [];
-    return appRow(c.id, c.entry, c.entry.blurb, look, () => act(c, look.act), extra);
+    return appRow(c.id, c.id, c.entry, c.entry.blurb, look, () => act(c, look.act), extra);
   }
 
-  function setupEl() {
+  /** "Allow installs first", on Apps or on the setup page (where: 'apps' | 'setup'; Start has already pressed Install there). */
+  function setupEl(where) {
     const fire = !!device.fireTv, box = el('div', 'setup');
     box.append(el('h2', null, 'Allow installs first'));
     (fire ? ['Settings › My Fire TV › Developer options › Install unknown apps › TV Toolbox › On',
              'No Developer options? In My Fire TV › About, press the device name 7 times.',
              'TV Toolbox not listed? Update the Fire TV first.']
           : ['Settings › System › About: press Android TV OS build 7 times.',
-             'Then press Install here, choose Settings and allow TV Toolbox.',
+             where === 'setup' ? 'When Android asks, choose Settings and allow TV Toolbox.' : 'Then press Install here, choose Settings and allow TV Toolbox.',
              'Play Protect stops it? Details › Install anyway.']).forEach(t => box.append(el('p', null, t)));
     if (fire) {
       const bar = el('div', 'bar');
@@ -162,13 +167,52 @@
     return box;
   }
 
+  const queued = id => queue.running === id || queue.waiting.includes(id);
+
+  /** A row on the setup page. App steps run through the queue by app id; Home and animations are never queued. */
+  function stepRow(s, pc) {
+    const todo = s.state === 'todo', done = { text: s.state === 'skipped' ? 'Not for this TV' : 'Done' };
+    if (s.kind === 'app') {
+      const c = s.card;
+      return appRow(s.key, c.id, c.entry, c.entry.blurb, todo ? { act: 'install', text: 'Install' } : { text: s.state === 'done' ? 'Installed' : 'Not for this TV' },
+        todo ? () => install([c.id]) : null);
+    }
+    if (s.kind === 'animations') return appRow(s.key, s.key, { name: 'Faster animations', icon: 'toolbox.png' }, 'Set the three animation scales to 0.5x.',
+      todo ? { text: 'Open settings', detail: s.detail } : done, todo ? () => TV.openDeveloperOptions() : null);
+    const look = todo ? { text: 'Open settings' }
+      : s.state === 'waiting' ? { text: queued(pc.id) ? 'Waiting' : '', detail: s.detail }
+      : s.state === 'reinstall' ? { text: 'Reinstall', detail: s.detail } : done;
+    return appRow(s.key, s.key, { name: 'Home screen', icon: pc.entry.icon },
+      'In Projectivy: Settings › General › Override current launcher, then allow it in Accessibility.', look,
+      todo ? () => TV.openProjectivySettings() : null);
+  }
+
+  function drawSetup(setup) {
+    const root = $('setup');
+    root.textContent = '';
+    const head = el('div', 'head');
+    head.append(el('h2', null, 'Set up this TV'));
+    root.append(head);
+    if (list && list.offline && list.savedAt) root.append(el('p', 'note', `Offline. List from ${when(list.savedAt)}.`));
+    if (device.canInstall === false) root.append(setupEl('setup'));
+    else if (!device.fireTv && setup.left.apps) root.append(el('p', 'note', 'Play Protect stops it? Details › Install anyway.'));
+    if (!setup.left.apps && !setup.left.settings) root.append(el('p', 'note', 'This TV is set up.'));
+    const proj = setup.steps.find(s => s.kind === 'app' && s.card.entry.package === Store.PROJECTIVY);
+    setup.steps.forEach(s => root.append(stepRow(s, proj && proj.card)));
+  }
+
   function render() {
     const root = $('apps'), had = focused && root.contains(focused) ? [focused.dataset.key, focused.dataset.card] : null;
-    const first = !!list && !shown;                 // the first list in: focus starts at the top
+    const first = !!list && !shown;                 // the first list in: focus starts at the top (on the setup row when there is one)
     shown = shown || !!list;
     root.textContent = '';
     parts = {};
-    if (device.canInstall === false) root.append(setupEl());
+    const setup = Store.setupSteps(list, device), left = setup.left.apps + setup.left.settings;
+    if (setup.steps.length && !left && !setupDone) {
+      setupDone = true;
+      try { localStorage.setItem('setupDone', '1'); } catch (e) { /* remembered for this run only */ }
+    }
+    if (device.canInstall === false) root.append(setupEl('apps'));
     const cards = list ? list.cards : [];
     const ups = cards.filter(c => c.state === 'update' && !c.group);   // "Only on your TV" entries update one by one
     const offline = list && list.offline && list.savedAt;
@@ -182,8 +226,11 @@
     else if (!cards.length) root.append(el('p', 'note', list.offline && !list.savedAt ? "Can't reach the store. Try again later." : 'Nothing in the store yet.'));
 
     const s = list && list.selfUpdate;
-    if (s) root.append(appRow(s.id, s, 'New version', { act: 'install', text: 'Update', detail: device.version ? `${device.version} → ${s.versionName}` : null },
-      () => install([s.id]), []));
+    if (s) root.append(appRow(s.id, s.id, s, 'New version', { act: 'install', text: 'Update', detail: device.version ? `${device.version} → ${s.versionName}` : null },
+      () => install([s.id])));
+    const row = left > 0 && !setupDone;
+    if (row) root.append(appRow('setup', 'setup', { name: 'Set up this TV', icon: 'toolbox.png' }, setup.blurb,
+      { act: 'start', text: 'Start', detail: Store.leftText(setup.left) }, () => app.showTab('setup')));
     cards.filter(c => !c.group).forEach(c => root.append(cardRow(c)));
     const mine = cards.filter(c => c.group);
     if (mine.length) {
@@ -191,9 +238,11 @@
       mine.forEach(c => root.append(cardRow(c)));
     }
 
+    if (tab === 'setup') drawSetup(setup);
+    else $('setup').textContent = '';               // no stale busy rows for room.js to see while it is hidden
     if (tab !== 'apps' || !$('dialog').hidden) return;
     if (had && !first) restore(had[0], had[1]);
-    else if (!focused || !document.contains(focused) || first) restore();
+    else if (!focused || !document.contains(focused) || first) restore(first && row ? 'setup' : null);
   }
 
   // ---- focus: the nearest focusable in the pressed direction, by position on screen ----
@@ -289,13 +338,14 @@
       return false;
     },
 
-    /** Shows one page: apps, tools (toolsui.js fills #tools) or about. */
+    /** Shows one page: apps, setup (no tab of its own: Apps stays lit), tools (toolsui.js fills #tools) or about. */
     showTab(name) {
       const page = $(name);
       if (!page || !page.classList.contains('page')) return;
       tab = name;
       document.querySelectorAll('.page').forEach(p => { p.hidden = p.id !== name; });
-      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === name));
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === (name === 'setup' ? 'apps' : name)));
+      if (name === 'setup') render();
       if (name === 'about') {
         $('about-name').textContent = 'TV Toolbox ' + (device.version || '');
         $('about-tools').hidden = toolsOn || !device.healthFile;   // only a TV with health.json ever asks for ADB

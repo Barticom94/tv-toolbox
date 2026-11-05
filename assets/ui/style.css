@@ -93,7 +93,7 @@ main { flex: 1; min-height: 0; }
 .busy .track { display: block; }
 .fill { display: block; height: 100%; background: var(--primary-container); transform: scaleX(0); transform-origin: left; transition: transform 200ms linear; }
 /* On Apps the icon-and-name column carries Moonlight only, so the light may be brightest there (see the contrast note). */
-#apps .note, #apps .group { color: var(--on-surface); }
+#apps .note, #apps .group, #setup .note { color: var(--on-surface); }
 
 .row.focus, .tab.focus, .pill.focus { background: var(--primary-container); color: var(--on-primary-container); }
 .row.focus { z-index: 1; transform: scale(1.02); box-shadow: 0 var(--sp-3) var(--sp-6) calc(-1 * var(--sp-1)) var(--shade); }
