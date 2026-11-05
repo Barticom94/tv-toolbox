@@ -135,7 +135,7 @@
     openInstallSettings() { log.push('openInstallSettings'); return true; },
     openProjectivySettings() {
       log.push('openProjectivySettings');
-      later(() => { facts.homeoff = true; app.onResume(); }, 300);   // the user switched the accessibility app off there
+      later(() => { facts.homeoff = false; app.onResume(); }, 300);   // the user switched Projectivy's accessibility service on there
       return true;
     },
     openDeveloperOptions() {
