@@ -15,8 +15,8 @@
   let device = {}, answer = null, list = null, toolsOn = false, tab = 'apps', focused = null, shown = false, closeDialog = null;
   let parked = null;                                // the open tab, held there because its page had nothing to focus yet
   let swap = null;                                  // {id, resumed}: a Swap waiting for the uninstall screen to close
-  let pendingSetup = [];                            // Start's other apps, queued once installs are allowed (one "not allowed" dialog, not four)
-  let homeNote = null;                              // "Can't open Projectivy", until the next resume
+  let pendingSetup = false;                         // Start ran without install permission: queue the apps once it is given (one "not allowed" dialog, not four)
+  let cantOpen = {};                                // step key → "Can't open …" for a settings step, until the next resume
   let lastStates = {}, setupOpened = false;         // the setup page's focus rule: step states at the last draw, and "just opened"
   const queue = new Store.Queue(), progress = {}, notes = {}, keyFor = {};
   let parts = {};                                   // id → the live parts of every row drawn for it, repainted on progress without a redraw
@@ -180,12 +180,14 @@
       return appRow(s.key, c.id, c.entry, c.entry.blurb, todo ? { act: 'install', text: 'Install' } : { text: s.state === 'done' ? 'Installed' : 'Not for this TV' },
         todo ? () => install([c.id]) : null);
     }
+    const opener = (open, text) => () => { if (!open()) { cantOpen[s.key] = text; render(); } };
     if (s.kind === 'animations') return appRow(s.key, s.key, { name: 'Faster animations', icon: 'toolbox.png' }, 'Set the three animation scales to 0.5x.',
-      todo ? { text: 'Open settings', detail: s.detail } : done, todo ? () => TV.openDeveloperOptions() : null);
-    const look = todo ? { text: 'Open settings', detail: homeNote }
+      todo ? { text: 'Open settings', detail: cantOpen[s.key] || s.detail } : done,
+      todo ? opener(() => TV.openDeveloperOptions(), "Can't open Developer options") : null);
+    const look = todo ? { text: 'Open settings', detail: cantOpen[s.key] }
       : s.state === 'waiting' ? { text: queued(pc.id) ? 'Waiting' : '', detail: s.detail }
       : s.state === 'reinstall' ? { text: 'Reinstall', detail: s.detail } : done;
-    const ok = todo ? () => { if (!TV.openProjectivySettings()) { homeNote = "Can't open Projectivy"; render(); } }
+    const ok = todo ? opener(() => TV.openProjectivySettings(), "Can't open Projectivy")
       : s.state === 'reinstall' ? () => ask("Projectivy was installed another way, so Android won't let it be your home screen. Reinstall it from here? Its settings go.",
         'Reinstall', () => { swap = { id: pc.id, resumed: false }; TV.uninstall(Store.PROJECTIVY); })   // then onCatalog installs the store's copy
       : null;
@@ -193,19 +195,23 @@
       'In Projectivy: Settings › General › Override current launcher, then allow it in Accessibility.', look, ok);
   }
 
-  /** Start: open the page and queue every app still to install. Without install permission only the first goes now. */
+  const setupIds = setup => setup.steps.filter(s => s.kind === 'app' && s.state === 'todo' && !queued(s.card.id)).map(s => s.card.id);
+
+  /** Start: open the page and queue every app still to install. Without install permission only the first goes now; the rest
+   *  (and the first again, if it was cancelled) queue once installs are allowed. */
   function startSetup(setup) {
     app.showTab('setup');
-    const ids = setup.steps.filter(s => s.kind === 'app' && s.state === 'todo' && !queued(s.card.id)).map(s => s.card.id);
-    pendingSetup = device.canInstall === false ? ids.slice(1) : [];
-    install(device.canInstall === false ? ids.slice(0, 1) : ids);
+    const ids = setupIds(setup);
+    pendingSetup = device.canInstall === false;
+    install(pendingSetup ? ids.slice(0, 1) : ids);
   }
 
   /** Focus on the setup page after a redraw: kept by key, unless the page just opened, the focused step just finished, or
-   *  focus left the page. Then: the box's Open Settings (on open), else the first step whose OK does something now (settings
-   *  steps only once no install is queued or running, so focus follows the installs), else the running install, else the
-   *  first step. A tab the user moved to is left alone. */
+   *  focus left the page (or what it was on is gone). Then: the box's Open Settings (on open), else the first step whose OK
+   *  does something now (settings steps only once no setup app is queued or running, so focus follows the installs), else
+   *  the running install, else the first step. A tab the user moved to is left alone. */
   function setupFocus(setup, had) {
+    if (had && !Array.from($('setup').querySelectorAll('.f')).some(e => e.dataset.key === had[0])) had = null;
     const was = lastStates, now = had && setup.steps.find(s => s.key === had[0]);
     lastStates = {};
     setup.steps.forEach(s => { lastStates[s.key] = s.state; });
@@ -215,8 +221,8 @@
     if (!opened && !turned && (had || (focused && focused.classList.contains('tab')))) { if (had) restore(had[0], had[1]); return; }
     const box = opened && $('setup').querySelector('.setup .f');
     if (box) { focus(box); return; }
-    const live = s => s.kind === 'app' ? s.state === 'todo' && !queued(s.card.id)
-      : !queue.busy && !queue.waiting.length && (s.state === 'todo' || s.state === 'reinstall');
+    const setupBusy = setup.steps.some(s => s.kind === 'app' && queued(s.card.id));
+    const live = s => s.kind === 'app' ? s.state === 'todo' && !queued(s.card.id) : !setupBusy && (s.state === 'todo' || s.state === 'reinstall');
     const t = setup.steps.find(live) || setup.steps.find(s => s.kind === 'app' && s.card.id === queue.running) || setup.steps[0];
     restore(t && t.key);
   }
@@ -392,7 +398,7 @@
 
     onResume() {
       readDevice();                                 // canInstall changes after a trip to Settings
-      homeNote = null;
+      cantOpen = {};
       if (swap) swap.resumed = true;
       TV.loadCatalog();
     },
@@ -405,10 +411,9 @@
         swap = null;
         if (c && c.state === 'install') { install([id]); return; }
       }
-      if (pendingSetup.length && device.canInstall !== false && tab === 'setup') {
-        const ids = pendingSetup;
-        pendingSetup = [];
-        install(ids);
+      if (pendingSetup && device.canInstall !== false && tab === 'setup') {   // what is still to install now, not what was then
+        pendingSetup = false;
+        install(setupIds(Store.setupSteps(list, device)));
         return;
       }
       render();

@@ -34,7 +34,8 @@
   const why = r => r && r.error === NO_ANSWER ? NO_ANSWER : FAIL;
   const list = s => { try { const a = JSON.parse(s); return Array.isArray(a) ? a : null; } catch (e) { return null; } };
   const self = () => kit.device().self || 'local.adam.tvtoolbox';
-  const a11y = () => kit.device().a11yApps || [];
+  // apps with an accessibility service on; null when the TV didn't say: then, as with the VPN list, nothing is stopped
+  const a11y = () => { const a = kit.device().a11yApps; return Array.isArray(a) ? a : null; };
   const size = b => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.round(b / 1e6) + ' MB';
 
   // ---- drawing ----
@@ -126,9 +127,9 @@
       if (!top.length) right.append(el('p', 'note', why(m)));
       top.forEach(p => {
         const pkg = p.name.split(':')[0], r = row(p.name, size(p.kb * 1024));
-        // never a VPN app: stopping it drops the connection; nor any app while the VPN list is unknown;
-        // nor an app with an accessibility service on (force-stopping Projectivy switches off its Home override)
-        const stoppable = mem.apps && mem.apps.includes(pkg) && pkg !== self() && mem.vpn && !mem.vpn.includes(pkg) && !a11y().includes(pkg);
+        // never a VPN app: stopping it drops the connection; nor an app with an accessibility service on (force-stopping
+        // Projectivy switches off its Home override); nor any app while either list is unknown
+        const acc = a11y(), stoppable = mem.apps && mem.apps.includes(pkg) && pkg !== self() && mem.vpn && acc && !mem.vpn.includes(pkg) && !acc.includes(pkg);
         if (stoppable) r.append(busyButton('Stop', 'stop:' + p.name, () => stopOne(pkg), mem.busy));
         right.append(r);
       });
@@ -271,7 +272,8 @@
   }
 
   /** kill-all for the cached apps, then stop every user app not on the list, one after another. Never this app or a VPN app
-   *  (stopping one drops the TV's connection), whatever the list says; when the VPN apps can't be read, nothing is stopped. */
+   *  (stopping one drops the TV's connection) or an accessibility app, whatever the list says; when the VPN or accessibility
+   *  apps can't be read, nothing is stopped. */
   async function closeApps() {
     mem.busy = true;
     mem.result = null;
@@ -279,16 +281,16 @@
     const keep = await loadKeep(), before = await tool('meminfo');
     await tool('killAll');
     const u = await tool('userApps'), v = await tool('vpnApps'), apps = u.ok ? Tools.parseUserApps(u.text) : [];
-    const vpn = v.ok && Array.isArray(v.apps) ? v.apps : null;
+    const vpn = v.ok && Array.isArray(v.apps) ? v.apps : null, acc = a11y();
     let quiet = false;                                  // a stop got no answer: the TV went quiet, so stop asking and say so
-    for (const p of vpn ? Tools.closable(apps, keep, vpn.concat(self(), a11y())) : []) {
+    for (const p of vpn && acc ? Tools.closable(apps, keep, vpn.concat(self(), acc)) : []) {
       if ((await tool('stopApp', p)).error === NO_ANSWER) { quiet = true; break; }
     }
     const after = await tool('meminfo');
     mem.info = after;
     if (u.ok) mem.apps = apps;
     if (vpn) mem.vpn = vpn;
-    mem.result = quiet ? NO_ANSWER : !vpn ? why(v) : before.ok && after.ok ? `Freed ${Math.max(0, Math.round((after.avail - before.avail) / 1e6))} MB`
+    mem.result = quiet ? NO_ANSWER : !vpn ? why(v) : !acc ? FAIL : before.ok && after.ok ? `Freed ${Math.max(0, Math.round((after.avail - before.avail) / 1e6))} MB`
       : why(before.ok ? after : before);
     mem.busy = false;
     draw();
