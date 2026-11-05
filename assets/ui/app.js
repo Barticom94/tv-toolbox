@@ -202,8 +202,9 @@
   }
 
   /** Focus on the setup page after a redraw: kept by key, unless the page just opened, the focused step just finished, or
-   *  focus left the page. Then: the box's Open Settings (on open), else the first step whose OK does something now, else the
-   *  running install, else the first step. A tab the user moved to is left alone. */
+   *  focus left the page. Then: the box's Open Settings (on open), else the first step whose OK does something now (settings
+   *  steps only once no install is queued or running, so focus follows the installs), else the running install, else the
+   *  first step. A tab the user moved to is left alone. */
   function setupFocus(setup, had) {
     const was = lastStates, now = had && setup.steps.find(s => s.key === had[0]);
     lastStates = {};
@@ -214,7 +215,8 @@
     if (!opened && !turned && (had || (focused && focused.classList.contains('tab')))) { if (had) restore(had[0], had[1]); return; }
     const box = opened && $('setup').querySelector('.setup .f');
     if (box) { focus(box); return; }
-    const live = s => s.kind === 'app' ? s.state === 'todo' && !queued(s.card.id) : s.state === 'todo' || s.state === 'reinstall';
+    const live = s => s.kind === 'app' ? s.state === 'todo' && !queued(s.card.id)
+      : !queue.busy && !queue.waiting.length && (s.state === 'todo' || s.state === 'reinstall');
     const t = setup.steps.find(live) || setup.steps.find(s => s.kind === 'app' && s.card.id === queue.running) || setup.steps[0];
     restore(t && t.key);
   }
