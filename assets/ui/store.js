@@ -72,6 +72,48 @@
     return { cards, selfUpdate, offline: answer.offline === true, savedAt: answer.savedAt || null };
   }
 
+  const PROJECTIVY = 'com.spocky.projengmenu';
+  const ABOUT = 'Settings › System › About: press Android TV OS build 7 times.';
+  const SLOW = 0.5;   // an animation scale at or below this counts as sped up
+
+  /** Spec 2: the steps of "Set up this TV" (one per flagged app, then Home and Animations on Google TV), what is left, and a one-line blurb. */
+  function setupSteps(list, device) {
+    const cards = ((list && list.cards) || []).filter(c => !c.group && c.entry.setup === true);
+    if (!cards.length) return { steps: [], left: { apps: 0, settings: 0 }, blurb: '' };
+    const isProj = c => c.entry.package === PROJECTIVY;
+    const step = (key, kind, card, state, detail) => ({ key, kind, card, state, detail: detail || null });
+    const apps = cards.filter(c => !isProj(c)).concat(cards.filter(isProj))
+      .map(c => step('setup:' + c.id, 'app', c, c.state === 'install' ? 'todo' : c.state === 'unsupported' ? 'skipped' : 'done'));
+    const steps = apps.slice();
+    const pc = cards.find(isProj);
+    if (!device.fireTv && pc) {
+      const blocked = (device.a11yApps || []).includes(PROJECTIVY) ? null : device.homeBlocked;
+      steps.push(pc.state === 'unsupported' || pc.state === 'off' ? step('setup:home', 'home', null, 'skipped')
+        : pc.state === 'install' ? step('setup:home', 'home', null, 'waiting', 'Install Projectivy first')
+        : blocked === null ? step('setup:home', 'home', null, 'done')
+        : blocked ? step('setup:home', 'home', null, 'reinstall', 'Android blocks this copy')
+        : step('setup:home', 'home', null, 'todo'));
+    }
+    const a = device.animations;
+    if (!device.fireTv && Array.isArray(a) && a.length === 3) {
+      const slow = a.filter(n => n > SLOW).length;
+      steps.push(step('setup:animations', 'animations', null, slow ? 'todo' : 'done',
+        !slow ? null : device.devOptions === false ? ABOUT : slow < 3 ? `${slow} of 3 left` : null));
+    }
+    const todo = apps.filter(s => s.state === 'todo').map(s => s.card.entry.name);
+    const left = { apps: todo.length, settings: steps.filter(s => s.kind !== 'app' && ['todo', 'waiting', 'reinstall'].includes(s.state)).length };
+    const has = k => steps.some(s => s.key === k && ['todo', 'waiting', 'reinstall'].includes(s.state));
+    const list2 = todo.length ? todo : [has('setup:home') && 'Home screen', has('setup:animations') && 'faster animations'].filter(Boolean);
+    const text = list2.length > 1 ? list2.slice(0, -1).join(', ') + ' and ' + list2[list2.length - 1] : list2[0] || '';
+    return { steps, left, blurb: text ? (todo.length ? text : text[0].toUpperCase() + text.slice(1)) + '.' : '' };
+  }
+
+  /** "4 apps, 2 settings", "1 app", "1 setting", or "" when nothing is left. */
+  function leftText(left) {
+    const n = (k, w) => left[k] ? `${left[k]} ${w}${left[k] === 1 ? '' : 's'}` : '';
+    return [n('apps', 'app'), n('settings', 'setting')].filter(Boolean).join(', ');
+  }
+
   /** Installs run one at a time: add() queues an id, next() starts the oldest, done() frees the slot. */
   class Queue {
     constructor() { this.waiting = []; this.running = null; }
@@ -80,11 +122,16 @@
       this.waiting.push(id);
       return true;
     }
-    next() { return this.running === null && this.waiting.length ? (this.running = this.waiting.shift()) : null; }
+    // next(defer): the oldest waiting id that is not `defer`; `defer` only when nothing else waits (the toolbox updates itself last).
+    next(defer) {
+      if (this.running !== null || !this.waiting.length) return null;
+      const i = this.waiting.findIndex(id => id !== defer);
+      return (this.running = this.waiting.splice(i < 0 ? 0 : i, 1)[0]);
+    }
     done(id) { if (id === this.running) this.running = null; }
     get busy() { return this.running !== null; }
   }
 
-  const Store = { pickFile, cardState, label, oldFound, buildList, Queue };
+  const Store = { pickFile, cardState, label, oldFound, buildList, setupSteps, leftText, PROJECTIVY, Queue };
   if (typeof module === 'object') module.exports = Store; else window.Store = Store;
 })();

@@ -2,11 +2,11 @@
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 const require = createRequire(import.meta.url);
-const { pickFile, cardState, label, oldFound, buildList, Queue } = require('../assets/ui/store.js');
+const { pickFile, cardState, label, oldFound, buildList, Queue, setupSteps, leftText, PROJECTIVY } = require('../assets/ui/store.js');
 
 const eq = (name, got, want) => { assert.deepStrictEqual(got, want, name); console.log('PASS ' + name); };
 
-const dev = { sdk: 34, abis: ['armeabi-v7a', 'armeabi'], fireTv: false, canInstall: true, self: 'local.adam.tvtoolbox' };
+const dev = { sdk: 34, abis: ['armeabi-v7a', 'armeabi'], fireTv: false, canInstall: true, self: 'local.adam.tvtoolbox', a11yApps: [], animations: [1, 1, 1], devOptions: true, homeBlocked: false };
 const only64 = { ...dev, abis: ['arm64-v8a'] };
 const e = { id: 'nuvio', name: 'Nuvio', package: 'com.nuvio.tv', versionName: '1.0.0', versionCode: 1062, minSdk: 24, signer: 'aa',
             files: [{ abi: 'armeabi-v7a', url: 'u1' }, { abi: 'universal', url: 'u2' }] };
@@ -86,3 +86,78 @@ eq('next a', q.next(), 'a'); eq('busy', q.busy, true); eq('no second while busy'
 eq('running one cannot be added again', q.add('a'), false);
 q.done('a'); eq('free after done', q.busy, false); eq('next b', q.next(), 'b'); q.done('b'); eq('next on empty', q.next(), null);
 eq('can queue again once done', q.add('a'), true);
+
+// queue: the toolbox's own update waits for the others
+{ const q2 = new Queue(); q2.add('a'); q2.add('toolbox'); q2.add('b');
+  eq('defer: a first', q2.next('toolbox'), 'a'); q2.done('a');
+  eq('defer: then b', q2.next('toolbox'), 'b'); q2.done('b');
+  eq('defer: toolbox last', q2.next('toolbox'), 'toolbox'); q2.done('toolbox');
+  q2.add('toolbox'); eq('defer: only toolbox waiting', q2.next('toolbox'), 'toolbox'); }
+
+// set up this TV
+const P = 'com.spocky.projengmenu';
+eq('PROJECTIVY', PROJECTIVY, P);
+const se = (id, name, pkg) => ({ ...e, id, name, package: pkg, setup: true });
+const nuvio = se('nuvio', 'Nuvio', 'com.nuvio.tv'), snug = se('snug', 'Snug', 'local.adam.streamedtv'),
+      telly = se('telly', 'Telly', 'local.adam.telly'), proj = se('projectivy', 'Projectivy', P);
+const allApps = [nuvio, snug, telly, proj];
+const have = (...es) => Object.fromEntries(es.map(x => [x.package, inst()]));
+const steps = (apps, installed, d) => setupSteps(buildList({ catalog: { apps }, installed }, d, false), d);
+const states = r => r.steps.map(s => s.state);
+const keys = r => r.steps.map(s => s.key);
+
+const fresh = steps(allApps, {}, dev);
+eq('fresh keys', keys(fresh), ['setup:nuvio', 'setup:snug', 'setup:telly', 'setup:projectivy', 'setup:home', 'setup:animations']);
+eq('fresh states', states(fresh), ['todo', 'todo', 'todo', 'todo', 'waiting', 'todo']);
+eq('fresh kinds', fresh.steps.map(s => s.kind), ['app', 'app', 'app', 'app', 'home', 'animations']);
+eq('fresh left', fresh.left, { apps: 4, settings: 2 });
+eq('fresh blurb', fresh.blurb, 'Nuvio, Snug, Telly and Projectivy.');
+eq('fresh leftText', leftText(fresh.left), '4 apps, 2 settings');
+eq('home waits with a reason', fresh.steps[4].detail, 'Install Projectivy first');
+eq('app step carries its card', fresh.steps[0].card.id, 'nuvio');
+eq('home and animations have no card', [fresh.steps[4].card, fresh.steps[5].card], [null, null]);
+eq('projectivy first in the catalogue still last', keys(steps([proj, nuvio, snug, telly], {}, dev)).slice(0, 4), ['setup:nuvio', 'setup:snug', 'setup:telly', 'setup:projectivy']);
+const fire = steps(allApps, {}, { ...dev, fireTv: true });
+eq('fire tv: four app steps', keys(fire), ['setup:nuvio', 'setup:snug', 'setup:telly', 'setup:projectivy']);
+eq('fire tv: no settings left', fire.left, { apps: 4, settings: 0 });
+
+const allIn = have(...allApps);
+const done = steps(allApps, allIn, { ...dev, a11yApps: [P], animations: [0.5, 0.5, 0] });
+eq('all done states', states(done), ['done', 'done', 'done', 'done', 'done', 'done']);
+eq('all done left', done.left, { apps: 0, settings: 0 });
+eq('all done blurb', [done.blurb, leftText(done.left)], ['', '']);
+
+const anim = (animations, extra = {}) => steps(allApps, allIn, { ...dev, a11yApps: [P], animations, ...extra }).steps[5];
+eq('anim 2 left', [anim([0.5, 1, 1]).state, anim([0.5, 1, 1]).detail], ['todo', '2 of 3 left']);
+eq('anim 1 left', anim([0.5, 0.5, 1.5]).detail, '1 of 3 left');
+eq('anim all 3 left: no detail', anim([1, 1, 1]).detail, null);
+eq('anim no dev options', anim([1, 1, 1], { devOptions: false }).detail, 'Settings › System › About: press Android TV OS build 7 times.');
+eq('anim unreadable: no step', keys(steps(allApps, allIn, { ...dev, animations: null })).includes('setup:animations'), false);
+
+const home = (d, installed = allIn, apps = allApps) => steps(apps, installed, { ...dev, animations: [0.5, 0.5, 0.5], ...d });
+const h = r => r.steps.find(s => s.key === 'setup:home');
+eq('home todo', [h(home({})).state, h(home({})).detail], ['todo', null]);
+eq('home blocked', [h(home({ homeBlocked: true })).state, h(home({ homeBlocked: true })).detail], ['reinstall', 'Android blocks this copy']);
+eq('service beats blocked', h(home({ homeBlocked: true, a11yApps: [P] })).state, 'done');
+const foreign = { ...allIn, [P]: inst({ signer: 'bb' }) };
+const hf = home({ homeBlocked: true }, foreign);
+eq('foreign projectivy: app done, home reinstall', [hf.steps[3].state, h(hf).state], ['done', 'reinstall']);
+const off = home({}, { ...allIn, [P]: inst({ enabled: false }) });
+eq('projectivy off: app done, home skipped', [off.steps[3].state, h(off).state], ['done', 'skipped']);
+const unsup = home({}, allIn, [nuvio, snug, telly, { ...proj, minSdk: 99 }]);
+eq('projectivy unsupported: both skipped', [unsup.steps[3].state, h(unsup).state], ['skipped', 'skipped']);
+eq('projectivy absent: no home step', h(home({}, allIn, [nuvio, snug, telly])), undefined);
+
+const tu = steps([nuvio, snug, { ...telly, minSdk: 99 }, proj], {}, dev);
+eq('telly unsupported', [tu.steps[2].state, tu.left.apps, tu.blurb], ['skipped', 3, 'Nuvio, Snug and Projectivy.']);
+const plain = [{ ...e }, { ...e, id: 'snug', package: 'x' }];
+eq('no setup flags: no steps', steps(plain, {}, dev), { steps: [], left: { apps: 0, settings: 0 }, blurb: '' });
+eq('empty answer: no steps', setupSteps(buildList({}, dev), dev).steps, []);
+
+const settingsOnly = steps(allApps, allIn, dev);
+eq('settings only', [settingsOnly.left, settingsOnly.blurb, leftText(settingsOnly.left)], [{ apps: 0, settings: 2 }, 'Home screen and faster animations.', '2 settings']);
+eq('blurb: home only', steps(allApps, allIn, { ...dev, animations: [0.5, 0.5, 0.5] }).blurb, 'Home screen.');
+eq('blurb: animations only', steps(allApps, allIn, { ...dev, a11yApps: [P] }).blurb, 'Faster animations.');
+eq('leftText singular', [leftText({ apps: 1, settings: 0 }), leftText({ apps: 0, settings: 1 })], ['1 app', '1 setting']);
+eq('blurb: two apps', steps([nuvio, snug], {}, dev).blurb, 'Nuvio and Snug.');
+eq('blurb: one app', steps([nuvio], {}, dev).blurb, 'Nuvio.');
