@@ -152,9 +152,9 @@ def new_release_is_read_once_per_file():
     e = CAT["apps"][0]
     assert ERRS == [] and len(FIRST.reads) == 2
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", CAT["generated"])
-    assert list(e) == ["id", "name", "blurb", "icon", "package", "hidden", "replaces", "versionName", "versionCode",
+    assert list(e) == ["id", "name", "blurb", "icon", "package", "hidden", "setup", "replaces", "versionName", "versionCode",
                        "minSdk", "targetSdk", "signer", "published", "files"]
-    assert (e["hidden"], e["replaces"], e["signer"], e["published"], e["icon"]) == (False, [], "aa", "2026-09-19", ICON)
+    assert (e["hidden"], e["setup"], e["replaces"], e["signer"], e["published"], e["icon"]) == (False, False, [], "aa", "2026-09-19", ICON)
     assert ICONS == {"nuvio": b"PNG"}
     assert [(f["abi"], f["url"], f["key"]) for f in e["files"]] == [
         ("armeabi-v7a", "https://github.com/o/r/releases/download/t/app-full-armeabi-v7a-release.apk", "11:2026-01-01T00:00:00Z"),
@@ -242,6 +242,19 @@ def one_failing_source_does_not_stop_the_rest():
 def hidden_and_replaces_pass_through():
     cat, icons, errs = build([app(hidden=True, replaces=["x.y", "z.w"])], {"apps": []}, Fake(releases={"o/nuvio": [release()]}))
     assert (cat["apps"][0]["hidden"], cat["apps"][0]["replaces"]) == (True, ["x.y", "z.w"])
+
+
+@check
+def setup_flag_passes_through():
+    cat, icons, errs = build([app(setup=True)], {"apps": []}, Fake(releases={"o/nuvio": [release()]}))
+    assert cat["apps"][0]["setup"] is True
+
+
+@check
+def every_setup_entry_is_visible():
+    with open(bc.APPS_JSON, encoding="utf-8") as f:
+        for a in json.load(f)["apps"]:
+            assert not (a.get("setup") and a.get("hidden")), f"{a['id']} is both setup and hidden"
 
 
 @check

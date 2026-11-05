@@ -102,7 +102,8 @@ def _head(app: dict, png: bytes | None) -> dict:
     head = {"id": app["id"], "name": app["name"], "blurb": app["blurb"]}
     if png is not None:
         head["icon"] = f"{PAGES}/icons/{app['id']}.png"
-    return {**head, "package": app["package"], "hidden": app.get("hidden", False), "replaces": app.get("replaces", [])}
+    return {**head, "package": app["package"], "hidden": app.get("hidden", False), "setup": app.get("setup", False),
+            "replaces": app.get("replaces", [])}
 
 
 def _carry(app: dict, old: dict, fetch) -> tuple[dict, bytes | None]:
