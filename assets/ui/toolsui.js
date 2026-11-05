@@ -34,6 +34,7 @@
   const why = r => r && r.error === NO_ANSWER ? NO_ANSWER : FAIL;
   const list = s => { try { const a = JSON.parse(s); return Array.isArray(a) ? a : null; } catch (e) { return null; } };
   const self = () => kit.device().self || 'local.adam.tvtoolbox';
+  const a11y = () => kit.device().a11yApps || [];
   const size = b => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.round(b / 1e6) + ' MB';
 
   // ---- drawing ----
@@ -125,8 +126,9 @@
       if (!top.length) right.append(el('p', 'note', why(m)));
       top.forEach(p => {
         const pkg = p.name.split(':')[0], r = row(p.name, size(p.kb * 1024));
-        // never a VPN app: stopping it drops the connection; nor any app while the VPN list is unknown
-        const stoppable = mem.apps && mem.apps.includes(pkg) && pkg !== self() && mem.vpn && !mem.vpn.includes(pkg);
+        // never a VPN app: stopping it drops the connection; nor any app while the VPN list is unknown;
+        // nor an app with an accessibility service on (force-stopping Projectivy switches off its Home override)
+        const stoppable = mem.apps && mem.apps.includes(pkg) && pkg !== self() && mem.vpn && !mem.vpn.includes(pkg) && !a11y().includes(pkg);
         if (stoppable) r.append(busyButton('Stop', 'stop:' + p.name, () => stopOne(pkg), mem.busy));
         right.append(r);
       });
@@ -279,7 +281,7 @@
     const u = await tool('userApps'), v = await tool('vpnApps'), apps = u.ok ? Tools.parseUserApps(u.text) : [];
     const vpn = v.ok && Array.isArray(v.apps) ? v.apps : null;
     let quiet = false;                                  // a stop got no answer: the TV went quiet, so stop asking and say so
-    for (const p of vpn ? Tools.closable(apps, keep, vpn.concat(self())) : []) {
+    for (const p of vpn ? Tools.closable(apps, keep, vpn.concat(self(), a11y())) : []) {
       if ((await tool('stopApp', p)).error === NO_ANSWER) { quiet = true; break; }
     }
     const after = await tool('meminfo');

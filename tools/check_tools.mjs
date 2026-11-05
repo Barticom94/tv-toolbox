@@ -44,7 +44,8 @@ eq('closable', closable(['b.app', 'com.nuvio.tv', 'a.app'], ['com.nuvio.tv']), [
 eq('closable with nothing kept', closable(['b', 'a'], []), ['a', 'b']);
 eq('vpn app never closable, even when not kept', closable(['b.app', 'com.example.vpn', 'a.app'], [], ['com.example.vpn']), ['a.app', 'b.app']);
 eq('vpn app never closable, kept or not', closable(['com.example.vpn', 'a.app'], ['com.example.vpn'], ['com.example.vpn', 'local.adam.tvtoolbox']), ['a.app']);
-eq('this app never closable', closable(['local.adam.tvtoolbox', 'a.app'], [], ['local.adam.tvtoolbox']), ['a.app']);
+eq('accessibility app never closable', closable(['com.spocky.projengmenu', 'a.app'], [], ['com.example.vpn', 'local.adam.tvtoolbox', 'com.spocky.projengmenu']), ['a.app']);
+eq('this app never closable',closable(['local.adam.tvtoolbox', 'a.app'], [], ['local.adam.tvtoolbox']), ['a.app']);
 
 // health row colours
 eq('green', rowState({ code: 200, ms: 300 }), 'green');
