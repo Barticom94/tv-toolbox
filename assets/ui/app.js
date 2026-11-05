@@ -15,6 +15,9 @@
   let device = {}, answer = null, list = null, toolsOn = false, tab = 'apps', focused = null, shown = false, closeDialog = null;
   let parked = null;                                // the open tab, held there because its page had nothing to focus yet
   let swap = null;                                  // {id, resumed}: a Swap waiting for the uninstall screen to close
+  let pendingSetup = [];                            // Start's other apps, queued once installs are allowed (one "not allowed" dialog, not four)
+  let homeNote = null;                              // "Can't open Projectivy", until the next resume
+  let lastStates = {}, setupOpened = false;         // the setup page's focus rule: step states at the last draw, and "just opened"
   const queue = new Store.Queue(), progress = {}, notes = {}, keyFor = {};
   let parts = {};                                   // id → the live parts of every row drawn for it, repainted on progress without a redraw
 
@@ -54,7 +57,7 @@
   }
 
   function pump() {
-    for (let id; (id = queue.next()) !== null;) {
+    for (let id; (id = queue.next('toolbox')) !== null;) {   // the toolbox updates itself last, so it never cuts other installs short
       const e = entryOf(id), abi = e && Store.pickFile(e, device);
       if (abi) { progress[id] = 0; TV.install(id, abi); return; }
       queue.done(id);                               // gone from the catalogue since it was queued
@@ -179,16 +182,45 @@
     }
     if (s.kind === 'animations') return appRow(s.key, s.key, { name: 'Faster animations', icon: 'toolbox.png' }, 'Set the three animation scales to 0.5x.',
       todo ? { text: 'Open settings', detail: s.detail } : done, todo ? () => TV.openDeveloperOptions() : null);
-    const look = todo ? { text: 'Open settings' }
+    const look = todo ? { text: 'Open settings', detail: homeNote }
       : s.state === 'waiting' ? { text: queued(pc.id) ? 'Waiting' : '', detail: s.detail }
       : s.state === 'reinstall' ? { text: 'Reinstall', detail: s.detail } : done;
+    const ok = todo ? () => { if (!TV.openProjectivySettings()) { homeNote = "Can't open Projectivy"; render(); } }
+      : s.state === 'reinstall' ? () => ask("Projectivy was installed another way, so Android won't let it be your home screen. Reinstall it from here? Its settings go.",
+        'Reinstall', () => { swap = { id: pc.id, resumed: false }; TV.uninstall(Store.PROJECTIVY); })   // then onCatalog installs the store's copy
+      : null;
     return appRow(s.key, s.key, { name: 'Home screen', icon: pc.entry.icon },
-      'In Projectivy: Settings › General › Override current launcher, then allow it in Accessibility.', look,
-      todo ? () => TV.openProjectivySettings() : null);
+      'In Projectivy: Settings › General › Override current launcher, then allow it in Accessibility.', look, ok);
+  }
+
+  /** Start: open the page and queue every app still to install. Without install permission only the first goes now. */
+  function startSetup(setup) {
+    app.showTab('setup');
+    const ids = setup.steps.filter(s => s.kind === 'app' && s.state === 'todo' && !queued(s.card.id)).map(s => s.card.id);
+    pendingSetup = device.canInstall === false ? ids.slice(1) : [];
+    install(device.canInstall === false ? ids.slice(0, 1) : ids);
+  }
+
+  /** Focus on the setup page after a redraw: kept by key, unless the page just opened, the focused step just finished, or
+   *  focus left the page. Then: the box's Open Settings (on open), else the first step whose OK does something now, else the
+   *  running install, else the first step. A tab the user moved to is left alone. */
+  function setupFocus(setup, had) {
+    const was = lastStates, now = had && setup.steps.find(s => s.key === had[0]);
+    lastStates = {};
+    setup.steps.forEach(s => { lastStates[s.key] = s.state; });
+    const turned = now && was[now.key] !== now.state && (now.state === 'done' || now.state === 'skipped');
+    const opened = setupOpened;
+    setupOpened = false;
+    if (!opened && !turned && (had || (focused && focused.classList.contains('tab')))) { if (had) restore(had[0], had[1]); return; }
+    const box = opened && $('setup').querySelector('.setup .f');
+    if (box) { focus(box); return; }
+    const live = s => s.kind === 'app' ? s.state === 'todo' && !queued(s.card.id) : s.state === 'todo' || s.state === 'reinstall';
+    const t = setup.steps.find(live) || setup.steps.find(s => s.kind === 'app' && s.card.id === queue.running) || setup.steps[0];
+    restore(t && t.key);
   }
 
   function drawSetup(setup) {
-    const root = $('setup');
+    const root = $('setup'), had = focused && root.contains(focused) ? [focused.dataset.key, focused.dataset.card] : null;
     root.textContent = '';
     const head = el('div', 'head');
     head.append(el('h2', null, 'Set up this TV'));
@@ -199,6 +231,7 @@
     if (!setup.left.apps && !setup.left.settings) root.append(el('p', 'note', 'This TV is set up.'));
     const proj = setup.steps.find(s => s.kind === 'app' && s.card.entry.package === Store.PROJECTIVY);
     setup.steps.forEach(s => root.append(stepRow(s, proj && proj.card)));
+    if ($('dialog').hidden) setupFocus(setup, had);
   }
 
   function render() {
@@ -230,7 +263,7 @@
       () => install([s.id])));
     const row = left > 0 && !setupDone;
     if (row) root.append(appRow('setup', 'setup', { name: 'Set up this TV', icon: 'toolbox.png' }, setup.blurb,
-      { act: 'start', text: 'Start', detail: Store.leftText(setup.left) }, () => app.showTab('setup')));
+      { act: 'start', text: 'Start', detail: Store.leftText(setup.left) }, () => startSetup(setup)));
     cards.filter(c => !c.group).forEach(c => root.append(cardRow(c)));
     const mine = cards.filter(c => c.group);
     if (mine.length) {
@@ -345,7 +378,7 @@
       tab = name;
       document.querySelectorAll('.page').forEach(p => { p.hidden = p.id !== name; });
       document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === (name === 'setup' ? 'apps' : name)));
-      if (name === 'setup') render();
+      if (name === 'setup') { setupOpened = true; render(); }
       if (name === 'about') {
         $('about-name').textContent = 'TV Toolbox ' + (device.version || '');
         $('about-tools').hidden = toolsOn || !device.healthFile;   // only a TV with health.json ever asks for ADB
@@ -357,6 +390,7 @@
 
     onResume() {
       readDevice();                                 // canInstall changes after a trip to Settings
+      homeNote = null;
       if (swap) swap.resumed = true;
       TV.loadCatalog();
     },
@@ -368,6 +402,12 @@
         const id = swap.id, c = list.cards.find(x => x.id === id);
         swap = null;
         if (c && c.state === 'install') { install([id]); return; }
+      }
+      if (pendingSetup.length && device.canInstall !== false && tab === 'setup') {
+        const ids = pendingSetup;
+        pendingSetup = [];
+        install(ids);
+        return;
       }
       render();
     },
