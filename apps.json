@@ -72,6 +72,16 @@
                   "asset": "^ProjectivyLauncher-[0-9.]+-c[0-9]+-xda-release\\.apk$" }
     },
     {
+      "id": "just-player",
+      "name": "Just Player",
+      "blurb": "Video player for Nuvio's External setting.",
+      "icon": "icons/just-player.png",
+      "package": "com.brouken.player",
+      "signer": "3cb97dba57d3d0bc190bae5f1f3a841643bcd9399bc31028ce25775d93d0109d",
+      "source": { "type": "github", "repo": "moneytoo/Player", "channel": "stable",
+                  "asset": "^Just\\.Player\\.v[0-9.]+\\.apk$" }
+    },
+    {
       "id": "toolbox",
       "name": "TV Toolbox",
       "blurb": "The toolbox itself.",
